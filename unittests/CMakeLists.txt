@@ -82,13 +82,13 @@ function(add_gtest)
 	endforeach()
 endfunction()
 
-add_library(px4_platform 
-			${PX4_SITL_BUILD}/src/modules/param/px4_parameters.c                         
-			${PX4_SRC}/drivers/device/device_posix.cpp 
-			${PX4_SRC}/drivers/device/i2c_posix.cpp 
+add_library(px4_platform
+			${PX4_SITL_BUILD}/src/modules/param/px4_parameters.c
+			${PX4_SRC}/drivers/device/device_posix.cpp
+			${PX4_SRC}/drivers/device/i2c_posix.cpp
 			${PX4_SRC}/drivers/device/ringbuffer.cpp
-			${PX4_SRC}/drivers/device/sim.cpp 
-			${PX4_SRC}/drivers/device/vdev.cpp 
+			${PX4_SRC}/drivers/device/sim.cpp
+			${PX4_SRC}/drivers/device/vdev.cpp
 			${PX4_SRC}/drivers/device/vdev_posix.cpp
 			${PX4_SRC}/drivers/device/vfile.cpp
 			${PX4_SRC}/platforms/posix/px4_layer/drv_hrt.c
@@ -112,8 +112,8 @@ add_library(px4_platform
 			${PX4_SRC}/platforms/posix/work_queue/work_lock.c
 			${PX4_SRC}/platforms/posix/work_queue/work_queue.c
 			${PX4_SRC}/platforms/posix/work_queue/work_thread.c
-			)                           
-target_include_directories(px4_platform PUBLIC ${PX4_SRC}/platforms)                           
+			)
+target_include_directories(px4_platform PUBLIC ${PX4_SRC}/platforms)
 
 
 #######################################################################

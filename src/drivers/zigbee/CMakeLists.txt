@@ -3,7 +3,7 @@ px4_add_module(
 	MAIN zigbee
 	STACK_MAIN 2000
 	SRCS
-		zigbee.c
+		zigbee_uart.c
 	DEPENDS
 		platforms__common
 	)

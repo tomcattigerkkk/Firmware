@@ -47,6 +47,7 @@
 
 #include <uORB/uORB.h>
 #include <uORB/topics/debug_key_value.h>
+#include <uORB/topics/zigbee_position.h>
 
 __EXPORT int px4_mavlink_debug_main(int argc, char *argv[]);
 

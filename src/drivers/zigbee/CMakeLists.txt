@@ -2,8 +2,10 @@ px4_add_module(
 	MODULE drivers__zigbee
 	MAIN zigbee
 	STACK_MAIN 2000
+    COMPILE_FLAGS
+        -Os
 	SRCS
-		zigbee_uart.c
+		zigbee.cpp
 	DEPENDS
 		platforms__common
 	)

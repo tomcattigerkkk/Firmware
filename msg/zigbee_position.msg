@@ -1,5 +1,5 @@
 #
 # zigbee data
 #
-int8[10] key
-float32 value
+char[19]     zig_msg
+float32[3]   position

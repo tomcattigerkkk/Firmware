@@ -82,7 +82,7 @@ int px4_simple_app_main(int argc, char *argv[])
 
 	for (int i = 0; i < 5; i++) {
 		/* wait for sensor update of 1 file descriptor for 1000 ms (1 second) */
-		int poll_ret = px4_poll(fds, 1, 1000);
+		int poll_ret = px4_poll(fds, 2, 2000);
 
 		/* handle the poll result */
 		if (poll_ret == 0) {
@@ -106,10 +106,10 @@ int px4_simple_app_main(int argc, char *argv[])
 				struct sensor_combined_s raw;
 				/* copy sensors raw data into local buffer */
 				orb_copy(ORB_ID(sensor_combined), sensor_sub_fd, &raw);
-				PX4_WARN("[px4_simple_app] Accelerometer:\t%8.4f\t%8.4f\t%8.4f",
-					 (double)raw.accelerometer_m_s2[0],
-					 (double)raw.accelerometer_m_s2[1],
-					 (double)raw.accelerometer_m_s2[2]);
+				// PX4_WARN("[px4_simple_app] Accelerometer:\t%8.4f\t%8.4f\t%8.4f",
+				// 	 (double)raw.accelerometer_m_s2[0],
+				// 	 (double)raw.accelerometer_m_s2[1],
+				// 	 (double)raw.accelerometer_m_s2[2]);
 
 				/* set att and publish this information for other apps */
 				att.roll = raw.accelerometer_m_s2[0];
@@ -122,8 +122,10 @@ int px4_simple_app_main(int argc, char *argv[])
 				struct zigbee_position_s zig;
 				/* copy sensors raw data into local buffer */
 				orb_copy(ORB_ID(zigbee_position), zigbee_position_fd, &zig);
-				PX4_WARN("[zigbee] value:\t%8.4f",
-					 (double)zig.value);
+				PX4_WARN("[zigbee] x:\t%8.4f\t%8.4f\t%8.4f",
+					 (double)zig.position[0],
+					 (double)zig.position[1],
+					 (double)zig.position[2]);
 
 				
 			}

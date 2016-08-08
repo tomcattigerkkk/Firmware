@@ -89,8 +89,11 @@
 #include <uORB/topics/vision_position_estimate.h>
 #include <uORB/topics/vtol_vehicle_status.h>
 #include <uORB/topics/wind_estimate.h>
+
 #include <uORB/uORB.h>
 
+#include <uORB/topics/zigbee_position.h>
+#include <v1.0/zigbee/mavlink_msg_zigbee_position.h>
 
 static uint16_t cm_uint16_from_m_float(float m);
 static void get_mavlink_mode_state(struct vehicle_status_s *status, uint8_t *mavlink_state,
@@ -3218,6 +3221,71 @@ protected:
 	}
 };
 
+class MavlinkStreamZigBee : public MavlinkStream
+{
+
+    public:
+	const char *get_name() const
+	{
+		return MavlinkStreamZigBee::get_name_static();
+	}
+
+	static const char *get_name_static()
+	{
+		return "ZIGBEE_POS";
+	}
+
+	static uint8_t get_id_static()
+	{
+		return MAVLINK_MSG_ID_ZIGBEE_POSITION;
+	}
+
+    uint8_t get_id()
+    {
+        return get_id_static();
+    }
+
+	static MavlinkStream *new_instance(Mavlink *mavlink)
+	{
+		return new MavlinkStreamZigBee(mavlink);
+	}
+
+	unsigned get_size()
+	{
+		return (_zigbee_time > 0) ? MAVLINK_MSG_ID_ZIGBEE_POSITION_LEN + MAVLINK_NUM_NON_PAYLOAD_BYTES : 0;
+	}
+
+private:
+	MavlinkOrbSubscription *_zigbee_sub;
+	uint64_t _zigbee_time;
+
+	/* do not allow top copying this class */
+	MavlinkStreamZigBee(MavlinkStreamZigBee &);
+	MavlinkStreamZigBee& operator = (const MavlinkStreamZigBee &);
+
+protected:
+	explicit MavlinkStreamZigBee(Mavlink *mavlink) : MavlinkStream(mavlink),
+		_zigbee_sub(_mavlink->add_orb_subscription(ORB_ID(zigbee_position))),
+		_zigbee_time(0)
+	{}
+
+	void send(const hrt_abstime t)
+	{
+		struct zigbee_position_s debug;
+
+		if (_zigbee_sub->update(&_zigbee_time, &debug)) {
+			__mavlink_zigbee_position_t msg;
+			memcpy(msg.zig_mav, debug.zig_msg, sizeof(debug.zig_msg));
+			msg.x_position = debug.position[0];
+			msg.y_position = debug.position[1];
+			msg.z_position = debug.position[2];
+			mavlink_msg_zigbee_position_send_struct(_mavlink->get_channel(), &msg);
+		}
+
+	
+	}
+};
+
 const StreamListItem *streams_list[] = {
 	new StreamListItem(&MavlinkStreamHeartbeat::new_instance, &MavlinkStreamHeartbeat::get_name_static, &MavlinkStreamHeartbeat::get_id_static),
 	new StreamListItem(&MavlinkStreamStatustext::new_instance, &MavlinkStreamStatustext::get_name_static, &MavlinkStreamStatustext::get_id_static),
@@ -3261,5 +3329,6 @@ const StreamListItem *streams_list[] = {
 	new StreamListItem(&MavlinkStreamAltitude::new_instance, &MavlinkStreamAltitude::get_name_static, &MavlinkStreamAltitude::get_id_static),
 	new StreamListItem(&MavlinkStreamADSBVehicle::new_instance, &MavlinkStreamADSBVehicle::get_name_static, &MavlinkStreamADSBVehicle::get_id_static),
 	new StreamListItem(&MavlinkStreamWind::new_instance, &MavlinkStreamWind::get_name_static, &MavlinkStreamWind::get_id_static),
+	new StreamListItem(&MavlinkStreamZigBee::new_instance, &MavlinkStreamZigBee::get_name_static, &MavlinkStreamZigBee::get_id_static),
 	nullptr
 };

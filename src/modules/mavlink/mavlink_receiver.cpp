@@ -262,7 +262,8 @@ MavlinkReceiver::handle_message(mavlink_message_t *msg)
 	case MAVLINK_MSG_ID_BATTERY_STATUS:
 		handle_message_battery_status(msg);
 		break;
-
+	case MAVLINK_MSG_ID_ZIGBEE_POSITION:
+		handle_message_zigbee_msg(msg);
 	default:
 		break;
 	}
@@ -2039,6 +2040,26 @@ MavlinkReceiver::handle_message_hil_state_quaternion(mavlink_message_t *msg)
 		}
 	}
 }
+
+
+void MavlinkReceiver::handle_message_zigbee_msg(mavlink_message_t *msg)
+{
+    __mavlink_zigbee_position_t zig;
+    mavlink_msg_zigbee_position_decode(msg, &zig);
+
+    struct zigbee_position_s f;
+    memset(&f, 0, sizeof(f));
+
+    
+
+    // if (_zigbee_msg_pub == nullptr) {
+    //     _zigbee_msg_pub = orb_advertise(ORB_ID(zigbee_position), &f);
+
+    // } else {
+    //     orb_publish(ORB_ID(zigbee_position), _zigbee_msg_pub, &f);
+    // }
+}
+
 
 /**
  * Receive data from UART.

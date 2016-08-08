@@ -319,6 +319,7 @@ then
 	else
 		unset HIL
 		gps start
+
 	fi
 
 	# waypoint storage
@@ -618,6 +619,7 @@ then
 	else
 		mavlink start -r 800000 -d /dev/ttyACM0 -m config -x
 	fi
+	
 
 	#
 	# Logging
@@ -894,6 +896,15 @@ then
 		# Play SOS
 		tone_alarm error
 	fi
+
+
+	#	
+	# ZigBee
+	#
+
+	zigbee start /dev/ttyS2
+
+	
 
 # End of autostart
 fi

@@ -56,6 +56,7 @@ struct position_estimator_inav_params {
 	float w_xy_res_v;
 	float w_gps_flow;
 	float w_acc_bias;
+	float w_xy_zigbee;
 	float flow_k;
 	float flow_q_min;
 	float lidar_err;
@@ -87,6 +88,7 @@ struct position_estimator_inav_param_handles {
 	param_t w_xy_res_v;
 	param_t w_gps_flow;
 	param_t w_acc_bias;
+	param_t w_xy_zigbee;
 	param_t flow_k;
 	param_t flow_q_min;
 	param_t lidar_err;

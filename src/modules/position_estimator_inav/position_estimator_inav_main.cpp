@@ -62,6 +62,7 @@
 #include <uORB/topics/att_pos_mocap.h>
 #include <uORB/topics/optical_flow.h>
 #include <uORB/topics/distance_sensor.h>
+#include <uORB/topics/zigbee_position.h>    // for zigbee
 #include <poll.h>
 #include <systemlib/err.h>
 #include <systemlib/mavlink_log.h>
@@ -90,6 +91,7 @@ static const hrt_abstime gps_topic_timeout = 500000;		// GPS topic timeout = 0.5
 static const hrt_abstime flow_topic_timeout = 1000000;	// optical flow topic timeout = 1s
 static const hrt_abstime lidar_timeout = 150000;	// lidar timeout = 150ms
 static const hrt_abstime lidar_valid_timeout = 1000000;	// estimate lidar distance during this time after lidar loss
+static const hrt_abstime zigbee_topic_timeout = 1000000;   // zigbee localization time out 1s
 static const unsigned updates_counter_len = 1000000;
 static const float max_flow = 1.0f;	// max flow value that can be used, rad/s
 
@@ -252,6 +254,8 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 
 	float eph_flow = 1.0f;
 
+	float eph_zigbee = 1.0f; // horizontal estimation precision
+
 	float eph_vision = 0.2f;
 	float epv_vision = 0.2f;
 
@@ -283,6 +287,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 	uint16_t flow_updates = 0;
 	uint16_t vision_updates = 0;
 	uint16_t mocap_updates = 0;
+	uint16_t zigbee_updates = 0; 
 
 	hrt_abstime updates_counter_start = hrt_absolute_time();
 	hrt_abstime pub_last = hrt_absolute_time();
@@ -312,7 +317,14 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 		{ 0.0f },		// E (pos)
 		{ 0.0f },		// D (pos)
 	};
+
 	const int mocap_heading = 2;
+
+	float corr_zigbee[] =
+	{
+		0.0f, 0.0f
+	};
+	float w_zigbee = 1.0f;
 
 	float dist_ground = 0.0f;		//variables for lidar altitude estimation
 	float corr_lidar = 0.0f;
@@ -321,6 +333,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 	bool lidar_first = true;
 	bool use_lidar = false;
 	bool use_lidar_prev = false;
+	bool zigbee_first = true; 
 
 	float corr_flow[] = { 0.0f, 0.0f };	// N E
 	float w_flow = 0.0f;
@@ -343,6 +356,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 	bool flow_accurate = false;		// flow should be accurate (this flag not updated if flow_valid == false)
 	bool vision_valid = false;		// vision is valid
 	bool mocap_valid = false;		// mocap is valid
+	bool zigbee_valid = false;
 
 	/* declare and safely initialize all structs */
 	struct actuator_controls_s actuator;
@@ -369,6 +383,8 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 	memset(&lidar, 0, sizeof(lidar));
 	struct vehicle_rates_setpoint_s rates_setpoint;
 	memset(&rates_setpoint, 0, sizeof(rates_setpoint));
+	struct zigbee_position_s zigbee_pos;
+	memset(&zigbee_pos, 0, sizeof(zigbee_pos));
 
 	/* subscribe */
 	int parameter_update_sub = orb_subscribe(ORB_ID(parameter_update));
@@ -382,6 +398,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 	int att_pos_mocap_sub = orb_subscribe(ORB_ID(att_pos_mocap));
 	int distance_sensor_sub = orb_subscribe(ORB_ID(distance_sensor));
 	int vehicle_rate_sp_sub = orb_subscribe(ORB_ID(vehicle_rates_setpoint));
+	int zigbee_position_sub = orb_subscribe(ORB_ID(zigbee_position));
 
 	/* advertise */
 	orb_advert_t vehicle_local_position_pub = orb_advertise(ORB_ID(vehicle_local_position), &local_pos);
@@ -934,6 +951,53 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 
 				gps_updates++;
 			}
+		    orb_check(zigbee_position_sub, &updated);
+		    if(updated)
+		    {
+		    	orb_copy(ORB_ID(zigbee_position), zigbee_position_sub, &zigbee_pos);
+
+
+				if (zigbee_valid) {
+
+					mavlink_log_info(&mavlink_log_pub, "[inav] ZigBee signal found");
+				        warnx("[inav] ZigBee signal found");
+
+					float zig_pos_x = zigbee_pos.position[0];
+					float zig_pos_y = zigbee_pos.position[1];
+					float zig_pos_home_x;
+					float zig_pos_home_y;
+					float zig_pos_x_i;
+					float zig_pos_y_i;
+
+					/* initialize reference position if needed */
+					if (zigbee_first) {
+
+						zig_pos_home_x = zig_pos_x;
+						zig_pos_home_y = zig_pos_y;
+						// x_est[0] = zig_pos_home_x;
+						// y_est[0] = zig_pos_home_y;
+					}
+
+					if (!zigbee_first) {
+
+						zig_pos_x_i = att.R[0]*zig_pos_x+att.R[1]*zig_pos_y+z_est[0]*att.R[2];
+						zig_pos_y_i = att.R[3]*zig_pos_x+att.R[4]*  
+						
+						corr_zigbee[0] = zig_pos_x - x_est[0]; 
+						corr_zigbee[1] = zig_pos_y - y_est[0];
+
+
+
+  						zigbee_updates++;
+					}
+
+				} else {
+					/* no ZigBee signal */
+					
+				}
+
+				
+		    }
 		}
 
 		/* check for timeout on FLOW topic */
@@ -999,8 +1063,11 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 		bool use_vision_xy = vision_valid && params.w_xy_vision_p > MIN_VALID_W;
 		bool use_vision_z = vision_valid && params.w_z_vision_p > MIN_VALID_W;
 		/* use MOCAP if it's valid and has a valid weight parameter */
-		bool use_mocap = mocap_valid && params.w_mocap_p > MIN_VALID_W && params.att_ext_hdg_m == mocap_heading; //check if external heading is mocap
+		bool use_mocap = mocap_valid && params.w_mocap_p > MIN_VALID_W && params.att_ext_hdg_m == mocap_heading; //
 
+
+		//check if external heading is mocap
+            
 		if (params.disable_mocap) { //disable mocap if fake gps is used
 			use_mocap = false;
 		}
@@ -1011,9 +1078,13 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 		/* use LIDAR if it's valid and lidar altitude estimation is enabled */
 		use_lidar = lidar_valid && params.enable_lidar_alt_est;
 
-		bool can_estimate_xy = (eph < max_eph_epv) || use_gps_xy || use_flow || use_vision_xy || use_mocap;
+		bool use_zigbee = zigbee_valid; 
+
+		bool can_estimate_xy = (eph < max_eph_epv) || use_gps_xy || use_flow || use_vision_xy || use_mocap || use_zigbee;
 
 		bool dist_bottom_valid = (t < lidar_valid_time + lidar_valid_timeout);
+
+
 
 		float w_xy_gps_p = params.w_xy_gps_p * w_gps_xy;
 		float w_xy_gps_v = params.w_xy_gps_v * w_gps_xy;

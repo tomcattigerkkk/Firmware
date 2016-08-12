@@ -58,6 +58,8 @@
 #include <uORB/topics/geofence_result.h>
 #include <uORB/topics/vehicle_attitude_setpoint.h>
 #include <uORB/topics/vehicle_land_detected.h>
+/* zigbee localization */
+#include <uORB/topics/zigbee_position.h>
 
 #include "navigator_mode.h"
 #include "mission.h"
@@ -227,6 +229,8 @@ private:
 	int		_param_update_sub;		/**< param update subscription */
 	int		_vehicle_command_sub;		/**< vehicle commands (onboard and offboard) */
 
+	int             _zigbee_pos_sub;                 /* zigbee position subscription  */
+
 	orb_advert_t	_pos_sp_triplet_pub;		/**< publish position setpoint triplet */
 	orb_advert_t	_mission_result_pub;
 	orb_advert_t	_geofence_result_pub;
@@ -246,6 +250,7 @@ private:
 	position_setpoint_triplet_s			_pos_sp_triplet;	/**< triplet of position setpoints */
 	position_setpoint_triplet_s			_reposition_triplet;	/**< triplet for non-mission direct position command */
 	position_setpoint_triplet_s			_takeoff_triplet;	/**< triplet for non-mission direct takeoff command */
+	zigbee_position_s                               _zigbee_pos;            /**< zigbee position structure */
 
 	mission_result_s				_mission_result;
 	geofence_result_s				_geofence_result;
@@ -334,6 +339,11 @@ private:
 	 * Retrieve vehicle control mode
 	 */
 	void		vehicle_control_mode_update();
+
+	/**
+	 * Retrieve vehicle control mode
+	 */
+	void		zigbee_position_update();
 
 	/**
 	 * Update parameters

@@ -264,6 +264,12 @@ Navigator::vehicle_control_mode_update()
 }
 
 void
+Navigator::zigbee_position_update()
+{
+	orb_copy(ORB_ID(zigbee_position), _zigbee_pos_sub, &_zigbee_pos);
+}
+
+void
 Navigator::params_update()
 {
 	parameter_update_s param_update;
@@ -309,6 +315,9 @@ Navigator::task_main()
 	_offboard_mission_sub = orb_subscribe(ORB_ID(offboard_mission));
 	_param_update_sub = orb_subscribe(ORB_ID(parameter_update));
 	_vehicle_command_sub = orb_subscribe(ORB_ID(vehicle_command));
+	/* zigbee */
+	_zigbee_pos_sub = orb_subscribe(ORB_ID(zigbee_position));
+
 
 	/* copy all topics first time */
 	vehicle_status_update();
@@ -320,6 +329,8 @@ Navigator::task_main()
 	home_position_update(true);
 	fw_pos_ctrl_status_update();
 	params_update();
+	/* zigbee */
+	zigbee_position_update();
 
 	/* wakeup source(s) */
 	px4_pollfd_struct_t fds[2] = {};
@@ -408,6 +419,13 @@ Navigator::task_main()
 		orb_check(_home_pos_sub, &updated);
 		if (updated) {
 			home_position_update();
+		}
+
+		/* zigbee position updated */
+		orb_check(_zigbee_pos_sub, &updated);
+		if(updated)
+		{
+			zigbee_position_update();
 		}
 
 		orb_check(_vehicle_command_sub, &updated);

@@ -334,6 +334,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 	bool use_lidar = false;
 	bool use_lidar_prev = false;
 	bool zigbee_first = true; 
+	hrt_abstime zigbee_time;  
 
 	float corr_flow[] = { 0.0f, 0.0f };	// N E
 	float w_flow = 0.0f;
@@ -966,22 +967,23 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 					float zig_pos_y = zigbee_pos.position[1];
 					float zig_pos_home_x;
 					float zig_pos_home_y;
-					float zig_pos_x_i;
-					float zig_pos_y_i;
+					// float zig_pos_x_i;
+					// float zig_pos_y_i;
 
 					/* initialize reference position if needed */
 					if (zigbee_first) {
-
-						zig_pos_home_x = zig_pos_x;
-						zig_pos_home_y = zig_pos_y;
-						// x_est[0] = zig_pos_home_x;
-						// y_est[0] = zig_pos_home_y;
+						/* set up the home position */
+						zig_pos_home_x = 2.0f;   //   zig_pos_x;
+						zig_pos_home_y = 2.0f;   //   zig_pos_y;
+						x_est[0] = zig_pos_home_x;
+						y_est[0] = zig_pos_home_y;
 					}
 
 					if (!zigbee_first) {
 
-						zig_pos_x_i = att.R[0]*zig_pos_x+att.R[1]*zig_pos_y+z_est[0]*att.R[2];
-						zig_pos_y_i = att.R[3]*zig_pos_x+att.R[4]*  
+						zigbee_time = t;
+
+
 						
 						corr_zigbee[0] = zig_pos_x - x_est[0]; 
 						corr_zigbee[1] = zig_pos_y - y_est[0];
@@ -1033,6 +1035,14 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 			lidar_valid = false;
 			warnx("LIDAR timeout");
 			mavlink_log_info(&mavlink_log_pub, "[inav] LIDAR timeout");
+		}
+
+		/* check for zigbee measurement timeout */
+		if(zigbee_valid && t> (zigbee_time + zigbee_topic_timeout))
+		{
+			zigbee_valid = false; 
+			warnx("ZigBee timeout");
+			mavlink_log_info(&mavlink_log_pub, "[inav] ZigBee timeout");
 		}
 
 		float dt = t_prev > 0 ? (t - t_prev) / 1000000.0f : 0.0f;
@@ -1097,10 +1107,15 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 
 		float w_mocap_p = params.w_mocap_p;
 
+
+		float w_xy_zigbee_p = params.w_xy_zigbee*w_zigbee;
+
 		/* reduce GPS weight if optical flow is good */
 		if (use_flow && flow_accurate) {
 			w_xy_gps_p *= params.w_gps_flow;
 			w_xy_gps_v *= params.w_gps_flow;
+
+			w_xy_zigbee_p *= params.w_gps_flow;  // reduce the weight of the zigbee
 		}
 
 		/* baro offset correction */
@@ -1131,6 +1146,29 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 
 			for (int j = 0; j < 3; j++) {
 				c += R_gps[j][i] * accel_bias_corr[j];
+			}
+
+			if (PX4_ISFINITE(c)) {
+				acc_bias[i] += c * params.w_acc_bias * dt;
+			}
+		}
+
+		/* accelerometer bias correction for ZigBee (use buffered rotation matrix) */
+		accel_bias_corr[0] = 0.0f;
+		accel_bias_corr[1] = 0.0f;
+		accel_bias_corr[2] = 0.0f;
+
+		if(use_zigbee)
+		{
+			accel_bias_corr[0] -= corr_zigbee[0]*w_xy_zigbee_p*w_xy_zigbee_p;
+			accel_bias_corr[1] -= corr_zigbee[1]*w_xy_zigbee_p*w_xy_zigbee_p;
+		}
+
+		for(int i = 0; i<3; i++)
+		{
+			float c = 0.0f;
+			for (int j = 0; j < 3; j++) {
+				c += PX4_R(att.R, j, i) * accel_bias_corr[j];
 			}
 
 			if (PX4_ISFINITE(c)) {
@@ -1308,6 +1346,13 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 				inertial_filter_correct(corr_mocap[1][0], dt, y_est, 0, w_mocap_p);
 			}
 
+			if(use_zigbee)
+			{
+				eph = fminf(eph, eph_zigbee);
+				inertial_filter_correct(corr_zigbee[0], dt, x_est, 0, w_xy_zigbee_p);
+				inertial_filter_correct(corr_zigbee[1], dt, y_est, 0, w_xy_zigbee_p);
+			}
+
 			if (!(PX4_ISFINITE(x_est[0]) && PX4_ISFINITE(x_est[1]) && PX4_ISFINITE(y_est[0]) && PX4_ISFINITE(y_est[1]))) {
 				write_debug_log("BAD ESTIMATE AFTER CORRECTION", dt, x_est, y_est, z_est, x_est_prev, y_est_prev, z_est_prev,
 						acc, corr_gps, w_xy_gps_p, w_xy_gps_v, corr_mocap, w_mocap_p,
@@ -1318,6 +1363,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 				memset(corr_vision, 0, sizeof(corr_vision));
 				memset(corr_mocap, 0, sizeof(corr_mocap));
 				memset(corr_flow, 0, sizeof(corr_flow));
+				memset(corr_zigbee, 0, sizeof(corr_zigbee));
 
 			} else {
 				memcpy(x_est_prev, x_est, sizeof(x_est));
@@ -1355,6 +1401,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 				flow_updates = 0;
 				vision_updates = 0;
 				mocap_updates = 0;
+				zigbee_updates = 0;
 			}
 		}
 

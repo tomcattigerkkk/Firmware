@@ -344,6 +344,18 @@ PARAM_DEFINE_FLOAT(INAV_LIDAR_OFF, 0.0f);
  */
 PARAM_DEFINE_INT32(CBRK_NO_VISION, 0);
 
+
+/**
+ * XY axis weight for ZigBee position
+ *
+ * Weight (cutoff frequency) for ZigBee position measurements.
+ *
+ * @min 0.0
+ * @max 10.0
+ * @group Position Estimator INAV
+ */
+PARAM_DEFINE_FLOAT(INAV_W_XY_ZIGBEE, 1.0f);
+
 int inav_parameters_init(struct position_estimator_inav_param_handles *h)
 {
 	h->w_z_baro = param_find("INAV_W_Z_BARO");
@@ -374,6 +386,7 @@ int inav_parameters_init(struct position_estimator_inav_param_handles *h)
 	h->enable_lidar_alt_est = param_find("INAV_LIDAR_EST");
 	h->lidar_calibration_offset = param_find("INAV_LIDAR_OFF");
 	h->att_ext_hdg_m = param_find("ATT_EXT_HDG_M");
+	h->w_xy_zigbee = param_find("INAV_W_XY_ZIGBEE");
 
 	return 0;
 }
@@ -409,6 +422,7 @@ int inav_parameters_update(const struct position_estimator_inav_param_handles *h
 	param_get(h->enable_lidar_alt_est, &(p->enable_lidar_alt_est));
 	param_get(h->lidar_calibration_offset, &(p->lidar_calibration_offset));
 	param_get(h->att_ext_hdg_m, &(p->att_ext_hdg_m));
+	param_get(h->w_xy_zigbee, &(p->w_xy_zigbee));
 
 	return 0;
 }

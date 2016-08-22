@@ -334,7 +334,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 	bool use_lidar = false;
 	bool use_lidar_prev = false;
 	bool zigbee_first = true; 
-	hrt_abstime zigbee_time;  
+	hrt_abstime zigbee_time = 0;  
 
 	float corr_flow[] = { 0.0f, 0.0f };	// N E
 	float w_flow = 0.0f;
@@ -357,7 +357,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 	bool flow_accurate = false;		// flow should be accurate (this flag not updated if flow_valid == false)
 	bool vision_valid = false;		// vision is valid
 	bool mocap_valid = false;		// mocap is valid
-	bool zigbee_valid = false;
+	bool zigbee_valid = false;              // zigbee is valid
 
 	/* declare and safely initialize all structs */
 	struct actuator_controls_s actuator;
@@ -952,11 +952,13 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 
 				gps_updates++;
 			}
+
+			/* zigbee localization */
 		    orb_check(zigbee_position_sub, &updated);
 		    if(updated)
 		    {
 		    	orb_copy(ORB_ID(zigbee_position), zigbee_position_sub, &zigbee_pos);
-
+		    	zigbee_valid = true;
 
 				if (zigbee_valid) {
 

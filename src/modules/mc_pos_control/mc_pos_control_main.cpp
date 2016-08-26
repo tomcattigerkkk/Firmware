@@ -1467,7 +1467,7 @@ MulticopterPositionControl::task_main()
 				float vel_norm_xy = sqrtf(_vel_sp(0) * _vel_sp(0) +
 							  _vel_sp(1) * _vel_sp(1));
 
-				if (vel_norm_xy > _params.vel_max(0)) {
+				if (vel_norm_xy > _params.vel_max(0)) {      // where vel_max == 1.25f
 					/* note assumes vel_max(0) == vel_max(1) */
 					_vel_sp(0) = _vel_sp(0) * _params.vel_max(0) / vel_norm_xy;
 					_vel_sp(1) = _vel_sp(1) * _params.vel_max(1) / vel_norm_xy;
@@ -1550,7 +1550,7 @@ MulticopterPositionControl::task_main()
 				acc_hor(0) = (_vel_sp(0) - _vel_sp_prev(0)) / dt;
 				acc_hor(1) = (_vel_sp(1) - _vel_sp_prev(1)) / dt;
 
-				if (acc_hor.length() > _params.acc_hor_max) {
+				if (acc_hor.length() > _params.acc_hor_max) {  // acc_hor_max == 10.0f
 					acc_hor.normalize();
 					acc_hor *= _params.acc_hor_max;
 					math::Vector<2> vel_sp_hor_prev(_vel_sp_prev(0), _vel_sp_prev(1));
@@ -1843,9 +1843,9 @@ MulticopterPositionControl::task_main()
 						}
 
 						/* vector of desired yaw direction in XY plane, rotated by PI/2 */
-						math::Vector<3> y_C(-sinf(_att_sp.yaw_body), cosf(_att_sp.yaw_body), 0.0f);
+						math::Vector<3> y_C(-sinf(_att_sp.yaw_body), cosf(_att_sp.yaw_body), 0.0f);//x_c == [cos sin 0]
 
-						if (fabsf(body_z(2)) > SIGMA) {
+						if (fabsf(body_z(2)) > SIGMA) { //0.000001
 							/* desired body_x axis, orthogonal to body_z */
 							body_x = y_C % body_z;
 

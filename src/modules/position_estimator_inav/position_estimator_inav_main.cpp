@@ -979,6 +979,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 						zig_pos_home_y = 2.0f;   //   zig_pos_y;
 						x_est[0] = zig_pos_home_x;
 						y_est[0] = zig_pos_home_y;
+						zigbee_first = false;
 					}
 
 					if (!zigbee_first) {

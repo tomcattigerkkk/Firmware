@@ -50,6 +50,7 @@
 #include <uORB/topics/sensor_combined.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/zigbee_position.h>
+#include <uORB/topics/control_state.h>
 
 __EXPORT int px4_simple_app_main(int argc, char *argv[]);
 
@@ -60,19 +61,22 @@ int px4_simple_app_main(int argc, char *argv[])
 	/* subscribe to sensor_combined topic */
 	int sensor_sub_fd = orb_subscribe(ORB_ID(sensor_combined));
 	int zigbee_position_fd = orb_subscribe(ORB_ID(zigbee_position));
+	int control_state_fd = orb_subscribe(ORB_ID(control_state));
 
 	orb_set_interval(sensor_sub_fd, 1000);
 	orb_set_interval(zigbee_position_fd, 1000);
+	orb_set_interval(control_state_fd, 1000);
 
 	/* advertise attitude topic */
-	struct vehicle_attitude_s att;
-	memset(&att, 0, sizeof(att));
-	orb_advert_t att_pub = orb_advertise(ORB_ID(vehicle_attitude), &att);
+	// struct vehicle_attitude_s att;
+	// memset(&att, 0, sizeof(att));
+	// orb_advert_t att_pub = orb_advertise(ORB_ID(vehicle_attitude), &att);
 
 	/* one could wait for multiple topics with this technique, just using one here */
 	px4_pollfd_struct_t fds[] = {
 		{ .fd = sensor_sub_fd,   .events = POLLIN },
 		{ .fd = zigbee_position_fd, .events = POLLIN},
+		{ .fd = control_state_fd, .events = POLLIN},
 		/* there could be more file descriptors here, in the form like:
 		 * { .fd = other_sub_fd,   .events = POLLIN },
 		 */
@@ -82,7 +86,7 @@ int px4_simple_app_main(int argc, char *argv[])
 
 	for (int i = 0; i < 5; i++) {
 		/* wait for sensor update of 1 file descriptor for 1000 ms (1 second) */
-		int poll_ret = px4_poll(fds, 2, 2000);
+		int poll_ret = px4_poll(fds, 3, 2000);
 
 		/* handle the poll result */
 		if (poll_ret == 0) {
@@ -106,16 +110,16 @@ int px4_simple_app_main(int argc, char *argv[])
 				struct sensor_combined_s raw;
 				/* copy sensors raw data into local buffer */
 				orb_copy(ORB_ID(sensor_combined), sensor_sub_fd, &raw);
-				// PX4_WARN("[px4_simple_app] Accelerometer:\t%8.4f\t%8.4f\t%8.4f",
-				// 	 (double)raw.accelerometer_m_s2[0],
-				// 	 (double)raw.accelerometer_m_s2[1],
-				// 	 (double)raw.accelerometer_m_s2[2]);
+				PX4_WARN("[px4_simple_app] Accelerometer:\t%8.4f\t%8.4f\t%8.4f",
+					 (double)raw.magnetometer_ga[0],
+					 (double)raw.magnetometer_ga[1],
+					 (double)raw.magnetometer_ga[2]);
 
-				/* set att and publish this information for other apps */
-				att.roll = raw.accelerometer_m_s2[0];
-				att.pitch = raw.accelerometer_m_s2[1];
-				att.yaw = raw.accelerometer_m_s2[2];
-				orb_publish(ORB_ID(vehicle_attitude), att_pub, &att);
+				// /* set att and publish this information for other apps */
+				// att.roll = raw.accelerometer_m_s2[0];
+				// att.pitch = raw.accelerometer_m_s2[1];
+				// att.yaw = raw.accelerometer_m_s2[2];
+				// orb_publish(ORB_ID(vehicle_attitude), att_pub, &att);
 			}
 			if (fds[1].revents & POLLIN) {
 				/* obtained data for the first file descriptor */
@@ -129,7 +133,19 @@ int px4_simple_app_main(int argc, char *argv[])
 
 				
 			}
+			if (fds[2].revents & POLLIN) {
+				/* obtained data for the first file descriptor */
+				struct control_state_s csss;
+				/* copy sensors raw data into local buffer */
+				orb_copy(ORB_ID(control_state), control_state_fd, &csss);
+				PX4_WARN("[zigbee] x:\t%8.4f\t%8.4f\t%8.4f\t%8.4f",
+					 (double)csss.q[0],
+					 (double)csss.q[1],
+					 (double)csss.q[2],
+					 (double)csss.q[3]);
 
+				
+			}
 			/* there could be more file descriptors here, in the form like:
 			 * if (fds[1..n].revents & POLLIN) {}
 			 */

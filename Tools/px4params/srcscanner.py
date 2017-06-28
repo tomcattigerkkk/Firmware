@@ -1,6 +1,7 @@
 import os
 import re
 import codecs
+import sys
 
 class SourceScanner(object):
     """
@@ -8,22 +9,22 @@ class SourceScanner(object):
     to the Parser.
     """
 
-    def ScanDir(self, srcdir, parser):
+    def ScanDir(self, srcdirs, parser):
         """
         Scans provided path and passes all found contents to the parser using
         parser.Parse method.
         """
         extensions1 = tuple([".h"])
-        extensions2 = tuple([".cpp", ".c"])
-        for dirname, dirnames, filenames in os.walk(srcdir):
-            for filename in filenames:
+        extensions2 = tuple([".c"])
+        for srcdir in srcdirs:
+            for filename in os.listdir(srcdir):
                 if filename.endswith(extensions1):
-                    path = os.path.join(dirname, filename)
+                    path = os.path.join(srcdir, filename)
                     if not self.ScanFile(path, parser):
                         return False
-            for filename in filenames:
+            for filename in os.listdir(srcdir):
                 if filename.endswith(extensions2):
-                    path = os.path.join(dirname, filename)
+                    path = os.path.join(srcdir, filename)
                     if not self.ScanFile(path, parser):
                         return False
         return True

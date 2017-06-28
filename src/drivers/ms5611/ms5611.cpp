@@ -33,7 +33,7 @@
 
 /**
  * @file ms5611.cpp
- * Driver for the MS5611 barometric pressure sensor connected via I2C or SPI.
+ * Driver for the MS5611 and MS6507 barometric pressure sensor connected via I2C or SPI.
  */
 
 #include <px4_config.h>
@@ -66,8 +66,15 @@
 
 #include <systemlib/perf_counter.h>
 #include <systemlib/err.h>
+#include <platforms/px4_getopt.h>
 
 #include "ms5611.h"
+
+enum MS56XX_DEVICE_TYPES {
+	MS56XX_DEVICE   = 0,
+	MS5611_DEVICE	= 5611,
+	MS5607_DEVICE	= 5607,
+};
 
 enum MS5611_BUS {
 	MS5611_BUS_ALL = 0,
@@ -76,12 +83,6 @@ enum MS5611_BUS {
 	MS5611_BUS_SPI_INTERNAL,
 	MS5611_BUS_SPI_EXTERNAL
 };
-
-/* oddly, ERROR is not defined for c++ */
-#ifdef ERROR
-# undef ERROR
-#endif
-static const int ERROR = -1;
 
 #ifndef CONFIG_SCHED_WORKQUEUE
 # error This requires CONFIG_SCHED_WORKQUEUE.
@@ -94,11 +95,34 @@ static const int ERROR = -1;
 #define POW2(_x)		((_x) * (_x))
 
 /*
- * MS5611 internal constants and data structures.
+ * MS5611/MS5607 internal constants and data structures.
  */
+#define ADDR_CMD_CONVERT_D1_OSR256		0x40	/* write to this address to start pressure conversion */
+#define ADDR_CMD_CONVERT_D1_OSR512		0x42	/* write to this address to start pressure conversion */
+#define ADDR_CMD_CONVERT_D1_OSR1024		0x44	/* write to this address to start pressure conversion */
+#define ADDR_CMD_CONVERT_D1_OSR2048		0x46	/* write to this address to start pressure conversion */
+#define ADDR_CMD_CONVERT_D1_OSR4096		0x48	/* write to this address to start pressure conversion */
+#define ADDR_CMD_CONVERT_D2_OSR256		0x50	/* write to this address to start temperature conversion */
+#define ADDR_CMD_CONVERT_D2_OSR512		0x52	/* write to this address to start temperature conversion */
+#define ADDR_CMD_CONVERT_D2_OSR1024		0x54	/* write to this address to start temperature conversion */
+#define ADDR_CMD_CONVERT_D2_OSR2048		0x56	/* write to this address to start temperature conversion */
+#define ADDR_CMD_CONVERT_D2_OSR4096		0x58	/* write to this address to start temperature conversion */
 
-/* internal conversion time: 9.17 ms, so should not be read at rates higher than 100 Hz */
-#define MS5611_CONVERSION_INTERVAL	40000	/* microseconds */
+/*
+  use an OSR of 1024 to reduce the self-heating effect of the
+  sensor. Information from MS tells us that some individual sensors
+  are quite sensitive to this effect and that reducing the OSR can
+  make a big difference
+ */
+#define ADDR_CMD_CONVERT_D1			ADDR_CMD_CONVERT_D1_OSR1024
+#define ADDR_CMD_CONVERT_D2			ADDR_CMD_CONVERT_D2_OSR1024
+
+/*
+ * Maximum internal conversion time for OSR 1024 is 2.28 ms. We set an update
+ * rate of 100Hz which is be very safe not to read the ADC before the
+ * conversion finished
+ */
+#define MS5611_CONVERSION_INTERVAL	10000	/* microseconds */
 #define MS5611_MEASUREMENT_RATIO	3	/* pressure measurements per temperature measurement */
 #define MS5611_BARO_DEVICE_PATH_EXT	"/dev/ms5611_ext"
 #define MS5611_BARO_DEVICE_PATH_INT	"/dev/ms5611_int"
@@ -106,7 +130,7 @@ static const int ERROR = -1;
 class MS5611 : public device::CDev
 {
 public:
-	MS5611(device::Device *interface, ms5611::prom_u &prom_buf, const char *path);
+	MS5611(device::Device *interface, ms5611::prom_u &prom_buf, const char *path, enum MS56XX_DEVICE_TYPES device_type);
 	~MS5611();
 
 	virtual int		init();
@@ -128,11 +152,11 @@ protected:
 	unsigned		_measure_ticks;
 
 	ringbuffer::RingBuffer	*_reports;
-
+	enum MS56XX_DEVICE_TYPES _device_type;
 	bool			_collect_phase;
 	unsigned		_measure_phase;
 
-	/* intermediate temperature values per MS5611 datasheet */
+	/* intermediate temperature values per MS5611/MS5607 datasheet */
 	int32_t			_TEMP;
 	int64_t			_OFF;
 	int64_t			_SENS;
@@ -149,7 +173,6 @@ protected:
 	perf_counter_t		_sample_perf;
 	perf_counter_t		_measure_perf;
 	perf_counter_t		_comms_errors;
-	perf_counter_t		_buffer_overflows;
 
 	/**
 	 * Initialize the automatic measurement state machine and start it.
@@ -214,12 +237,14 @@ protected:
  */
 extern "C" __EXPORT int ms5611_main(int argc, char *argv[]);
 
-MS5611::MS5611(device::Device *interface, ms5611::prom_u &prom_buf, const char *path) :
+MS5611::MS5611(device::Device *interface, ms5611::prom_u &prom_buf, const char *path,
+	       enum MS56XX_DEVICE_TYPES device_type) :
 	CDev("MS5611", path),
 	_interface(interface),
 	_prom(prom_buf.s),
 	_measure_ticks(0),
 	_reports(nullptr),
+	_device_type(device_type),
 	_collect_phase(false),
 	_measure_phase(0),
 	_TEMP(0),
@@ -231,11 +256,18 @@ MS5611::MS5611(device::Device *interface, ms5611::prom_u &prom_buf, const char *
 	_class_instance(-1),
 	_sample_perf(perf_alloc(PC_ELAPSED, "ms5611_read")),
 	_measure_perf(perf_alloc(PC_ELAPSED, "ms5611_measure")),
-	_comms_errors(perf_alloc(PC_COUNT, "ms5611_com_err")),
-	_buffer_overflows(perf_alloc(PC_COUNT, "ms5611_buf_of"))
+	_comms_errors(perf_alloc(PC_COUNT, "ms5611_com_err"))
 {
 	// work_cancel in stop_cycle called from the dtor will explode if we don't do this...
 	memset(&_work, 0, sizeof(_work));
+
+	// set the device type from the interface
+	_device_id.devid_s.bus_type = _interface->get_device_bus_type();
+	_device_id.devid_s.bus = _interface->get_device_bus();
+	_device_id.devid_s.address = _interface->get_device_address();
+
+	/* set later on init */
+	_device_id.devid_s.devtype = 0;
 }
 
 MS5611::~MS5611()
@@ -256,7 +288,6 @@ MS5611::~MS5611()
 	perf_free(_sample_perf);
 	perf_free(_measure_perf);
 	perf_free(_comms_errors);
-	perf_free(_buffer_overflows);
 
 	delete _interface;
 }
@@ -265,6 +296,7 @@ int
 MS5611::init()
 {
 	int ret;
+	bool autodetect = false;
 
 	ret = CDev::init();
 
@@ -290,8 +322,13 @@ MS5611::init()
 	_measure_phase = 0;
 	_reports->flush();
 
-	/* this do..while is goto without goto */
-	do {
+	if (_device_type == MS56XX_DEVICE) {
+		autodetect = true;
+		/* try first with MS5611 and fallback to MS5607 */
+		_device_type = MS5611_DEVICE;
+	}
+
+	while (true) {
 		/* do temperature first */
 		if (OK != measure()) {
 			ret = -EIO;
@@ -321,17 +358,54 @@ MS5611::init()
 		/* state machine will have generated a report, copy it out */
 		_reports->get(&brp);
 
+		// DEVICE_LOG("altitude (%u) = %.2f", _device_type, (double)brp.altitude);
+
+		if (autodetect) {
+			if (_device_type == MS5611_DEVICE) {
+				if (brp.altitude > 5300.f) {
+					/* This is likely not this device, try again */
+					_device_type = MS5607_DEVICE;
+					_measure_phase = 0;
+
+					continue;
+				}
+
+			} else if (_device_type == MS5607_DEVICE) {
+				if (brp.altitude > 5300.f) {
+					/* Both devices returned very high altitude;
+					 * have fun on Everest using MS5611 */
+					_device_type = MS5611_DEVICE;
+				}
+			}
+		}
+
+		switch (_device_type) {
+		default:
+
+		/* fall through */
+		case MS5611_DEVICE:
+			_device_id.devid_s.devtype = DRV_BARO_DEVTYPE_MS5611;
+			break;
+
+		case MS5607_DEVICE:
+			_device_id.devid_s.devtype = DRV_BARO_DEVTYPE_MS5607;
+			break;
+		}
+
+		/* ensure correct devid */
+		brp.device_id = _device_id.devid;
+
 		ret = OK;
 
 		_baro_topic = orb_advertise_multi(ORB_ID(sensor_baro), &brp,
 						  &_orb_class_instance, (is_external()) ? ORB_PRIO_HIGH : ORB_PRIO_DEFAULT);
 
-
 		if (_baro_topic == nullptr) {
 			warnx("failed to create sensor_baro publication");
 		}
 
-	} while (0);
+		break;
+	}
 
 out:
 	return ret;
@@ -691,27 +765,62 @@ MS5611::collect()
 		_TEMP = 2000 + (int32_t)(((int64_t)dT * _prom.c6_temp_coeff_temp) >> 23);
 
 		/* base sensor scale/offset values */
-		_SENS = ((int64_t)_prom.c1_pressure_sens << 15) + (((int64_t)_prom.c3_temp_coeff_pres_sens * dT) >> 8);
-		_OFF  = ((int64_t)_prom.c2_pressure_offset << 16) + (((int64_t)_prom.c4_temp_coeff_pres_offset * dT) >> 7);
+		if (_device_type == MS5611_DEVICE) {
 
-		/* temperature compensation */
-		if (_TEMP < 2000) {
+			/* Perform MS5611 Caculation */
 
-			int32_t T2 = POW2(dT) >> 31;
+			_OFF  = ((int64_t)_prom.c2_pressure_offset << 16) + (((int64_t)_prom.c4_temp_coeff_pres_offset * dT) >> 7);
+			_SENS = ((int64_t)_prom.c1_pressure_sens << 15) + (((int64_t)_prom.c3_temp_coeff_pres_sens * dT) >> 8);
 
-			int64_t f = POW2((int64_t)_TEMP - 2000);
-			int64_t OFF2 = 5 * f >> 1;
-			int64_t SENS2 = 5 * f >> 2;
+			/* MS5611 temperature compensation */
 
-			if (_TEMP < -1500) {
-				int64_t f2 = POW2(_TEMP + 1500);
-				OFF2 += 7 * f2;
-				SENS2 += 11 * f2 >> 1;
+			if (_TEMP < 2000) {
+
+				int32_t T2 = POW2(dT) >> 31;
+
+				int64_t f = POW2((int64_t)_TEMP - 2000);
+				int64_t OFF2 = 5 * f >> 1;
+				int64_t SENS2 = 5 * f >> 2;
+
+				if (_TEMP < -1500) {
+
+					int64_t f2 = POW2(_TEMP + 1500);
+					OFF2 += 7 * f2;
+					SENS2 += 11 * f2 >> 1;
+				}
+
+				_TEMP -= T2;
+				_OFF  -= OFF2;
+				_SENS -= SENS2;
 			}
 
-			_TEMP -= T2;
-			_OFF  -= OFF2;
-			_SENS -= SENS2;
+		} else if (_device_type == MS5607_DEVICE) {
+
+			/* Perform MS5607 Caculation */
+
+			_OFF  = ((int64_t)_prom.c2_pressure_offset << 17) + (((int64_t)_prom.c4_temp_coeff_pres_offset * dT) >> 6);
+			_SENS = ((int64_t)_prom.c1_pressure_sens << 16) + (((int64_t)_prom.c3_temp_coeff_pres_sens * dT) >> 7);
+
+			/* MS5607 temperature compensation */
+
+			if (_TEMP < 2000) {
+
+				int32_t T2 = POW2(dT) >> 31;
+
+				int64_t f = POW2((int64_t)_TEMP - 2000);
+				int64_t OFF2 = 61 * f >> 4;
+				int64_t SENS2 = 2 * f;
+
+				if (_TEMP < -1500) {
+					int64_t f2 = POW2(_TEMP + 1500);
+					OFF2 += 15 * f2;
+					SENS2 += 8 * f2;
+				}
+
+				_TEMP -= T2;
+				_OFF  -= OFF2;
+				_SENS -= SENS2;
+			}
 		}
 
 	} else {
@@ -724,6 +833,9 @@ MS5611::collect()
 		/* generate a new report */
 		report.temperature = _TEMP / 100.0f;
 		report.pressure = P / 100.0f;		/* convert to millibar */
+
+		/* return device ID */
+		report.device_id = _device_id.devid;
 
 		/* altitude calculations based on http://www.kansasflyer.org/index.asp?nav=Avi&sec=Alti&tab=Theory&pg=1 */
 
@@ -763,14 +875,12 @@ MS5611::collect()
 		report.altitude = (((pow((p / p1), (-(a * R) / g))) * T1) - T1) / a;
 
 		/* publish it */
-		if (!(_pub_blocked)) {
+		if (!(_pub_blocked) && _baro_topic != nullptr) {
 			/* publish it */
 			orb_publish(ORB_ID(sensor_baro), _baro_topic, &report);
 		}
 
-		if (_reports->force(&report)) {
-			perf_count(_buffer_overflows);
-		}
+		_reports->force(&report);
 
 		/* notify anyone waiting for data */
 		poll_notify(POLLIN);
@@ -789,9 +899,9 @@ MS5611::print_info()
 {
 	perf_print_counter(_sample_perf);
 	perf_print_counter(_comms_errors);
-	perf_print_counter(_buffer_overflows);
 	printf("poll interval:  %u ticks\n", _measure_ticks);
 	_reports->print_info("report queue");
+	printf("device:         %s\n", _device_type == MS5611_DEVICE ? "ms5611" : "ms5607");
 	printf("TEMP:           %d\n", _TEMP);
 	printf("SENS:           %lld\n", _SENS);
 	printf("OFF:            %lld\n", _OFF);
@@ -840,9 +950,9 @@ struct ms5611_bus_option {
 };
 #define NUM_BUS_OPTIONS (sizeof(bus_options)/sizeof(bus_options[0]))
 
-bool	start_bus(struct ms5611_bus_option &bus);
+bool	start_bus(struct ms5611_bus_option &bus, enum MS56XX_DEVICE_TYPES device_type);
 struct ms5611_bus_option &find_bus(enum MS5611_BUS busid);
-void	start(enum MS5611_BUS busid);
+void	start(enum MS5611_BUS busid, enum MS56XX_DEVICE_TYPES device_type);
 void	test(enum MS5611_BUS busid);
 void	reset(enum MS5611_BUS busid);
 void	info();
@@ -900,7 +1010,7 @@ crc4(uint16_t *n_prom)
  * Start the driver.
  */
 bool
-start_bus(struct ms5611_bus_option &bus)
+start_bus(struct ms5611_bus_option &bus, enum MS56XX_DEVICE_TYPES device_type)
 {
 	if (bus.dev != nullptr) {
 		errx(1, "bus option already started");
@@ -915,7 +1025,7 @@ start_bus(struct ms5611_bus_option &bus)
 		return false;
 	}
 
-	bus.dev = new MS5611(interface, prom_buf, bus.devpath);
+	bus.dev = new MS5611(interface, prom_buf, bus.devpath, device_type);
 
 	if (bus.dev != nullptr && OK != bus.dev->init()) {
 		delete bus.dev;
@@ -947,7 +1057,7 @@ start_bus(struct ms5611_bus_option &bus)
  * is either successfully up and running or failed to start.
  */
 void
-start(enum MS5611_BUS busid)
+start(enum MS5611_BUS busid, enum MS56XX_DEVICE_TYPES device_type)
 {
 	uint8_t i;
 	bool started = false;
@@ -963,11 +1073,11 @@ start(enum MS5611_BUS busid)
 			continue;
 		}
 
-		started = started | start_bus(bus_options[i]);
+		started = started | start_bus(bus_options[i], device_type);
 	}
 
 	if (!started) {
-		errx(1, "driver start failed");
+		exit(1);
 	}
 
 	// one or more drivers started OK
@@ -1195,6 +1305,9 @@ usage()
 	warnx("    -I    (intternal I2C bus)");
 	warnx("    -S    (external SPI bus)");
 	warnx("    -s    (internal SPI bus)");
+	warnx("    -T    5611|5607 (default 5611)");
+	warnx("    -T    0 (autodetect version)");
+
 }
 
 } // namespace
@@ -1203,10 +1316,13 @@ int
 ms5611_main(int argc, char *argv[])
 {
 	enum MS5611_BUS busid = MS5611_BUS_ALL;
+	enum MS56XX_DEVICE_TYPES device_type = MS5611_DEVICE;
 	int ch;
+	int myoptind = 1;
+	const char *myoptarg = NULL;
 
 	/* jump over start/off/etc and look at options first */
-	while ((ch = getopt(argc, argv, "XISs")) != EOF) {
+	while ((ch = px4_getopt(argc, argv, "T:XISs", &myoptind, &myoptarg)) != EOF) {
 		switch (ch) {
 		case 'X':
 			busid = MS5611_BUS_I2C_EXTERNAL;
@@ -1224,19 +1340,37 @@ ms5611_main(int argc, char *argv[])
 			busid = MS5611_BUS_SPI_INTERNAL;
 			break;
 
+		case 'T': {
+				int val = atoi(myoptarg);
+
+				if (val == 5611) {
+					device_type = MS5611_DEVICE;
+					break;
+
+				} else if (val == 5607) {
+					device_type = MS5607_DEVICE;
+					break;
+
+				} else if (val == 0) {
+					device_type = MS56XX_DEVICE;
+					break;
+				}
+			}
+
+		//no break
 		default:
 			ms5611::usage();
 			exit(0);
 		}
 	}
 
-	const char *verb = argv[optind];
+	const char *verb = argv[myoptind];
 
 	/*
 	 * Start/load the driver.
 	 */
 	if (!strcmp(verb, "start")) {
-		ms5611::start(busid);
+		ms5611::start(busid, device_type);
 	}
 
 	/*

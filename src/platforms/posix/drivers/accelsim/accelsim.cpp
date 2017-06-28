@@ -69,13 +69,13 @@
 
 #define ADDR_WHO_AM_I			0x0F
 
-#define ACCELSIM_ACCEL_DEFAULT_RATE			800
+#define ACCELSIM_ACCEL_DEFAULT_RATE			250
 #define ACCELSIM_ACCEL_DEFAULT_DRIVER_FILTER_FREQ	30
 #define ACCELSIM_ONE_G					9.80665f
 
 #define DIR_READ				(1<<7)
 #define DIR_WRITE				(0<<7)
-#define ACC_READ 				(0<<6)
+#define ACC_READ 				(1<<5)
 #define MAG_READ 				(1<<6)
 
 extern "C" { __EXPORT int accelsim_main(int argc, char *argv[]); }
@@ -388,7 +388,7 @@ ACCELSIM::transfer(uint8_t *send, uint8_t *recv, unsigned len)
 		// Get data from the simulator
 		Simulator *sim = Simulator::getInstance();
 
-		if (sim == NULL) {
+		if (sim == nullptr) {
 			return ENODEV;
 		}
 
@@ -915,8 +915,7 @@ ACCELSIM::mag_measure()
 	} raw_mag_report;
 #pragma pack(pop)
 
-	mag_report mag_report;
-	memset(&mag_report, 0, sizeof(mag_report));
+	mag_report mag_report = {};
 
 	/* start the performance counter */
 	perf_begin(_mag_sample_perf);
@@ -946,6 +945,7 @@ ACCELSIM::mag_measure()
 
 
 	mag_report.timestamp = hrt_absolute_time();
+	mag_report.is_external = false;
 
 	mag_report.x_raw = (int16_t)(raw_mag_report.x / _mag_range_scale);
 	mag_report.y_raw = (int16_t)(raw_mag_report.y / _mag_range_scale);
@@ -1159,7 +1159,7 @@ accelsim_main(int argc, char *argv[])
 	enum Rotation rotation = ROTATION_NONE;
 	int ret;
 	int myoptind = 1;
-	const char *myoptarg = NULL;
+	const char *myoptarg = nullptr;
 
 	/* jump over start/off/etc and look at options first */
 	while ((ch = px4_getopt(argc, argv, "R:", &myoptind, &myoptarg)) != EOF) {

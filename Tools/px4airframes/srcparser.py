@@ -22,6 +22,64 @@ class ParameterGroup(object):
         """
         return self.name
 
+    def GetImageName(self):
+        """
+        Get parameter group image base name (w/o extension)
+        """
+        if (self.name == "Standard Plane"):
+            return "Plane"
+        elif (self.name == "Flying Wing"):
+            return "FlyingWing"
+        elif (self.name == "Quadrotor x"):
+            return "QuadRotorX"
+        elif (self.name == "Quadrotor +"):
+            return "QuadRotorPlus"
+        elif (self.name == "Hexarotor x"):
+            return "HexaRotorX"
+        elif (self.name == "Hexarotor +"):
+            return "HexaRotorPlus"
+        elif (self.name == "Octorotor +"):
+            return "OctoRotorPlus"
+        elif (self.name == "Octorotor x"):
+            return "OctoRotorX"
+        elif (self.name == "Octorotor Coaxial"):
+            return "OctoRotorXCoaxial"
+        elif (self.name == "Octo Coax Wide"):
+            return "OctoRotorXCoaxial"
+        elif (self.name == "Quadrotor Wide"):
+            return "QuadRotorWide"
+        elif (self.name == "Quadrotor H"):
+            return "QuadRotorH"
+        elif (self.name == "Simulation"):
+            return "AirframeSimulation"
+        elif (self.name == "Plane A-Tail"):
+            return "PlaneATail"
+        elif (self.name == "VTOL Duo Tailsitter"):
+            return "VTOLDuoRotorTailSitter"
+        elif (self.name == "Standard VTOL"):
+            return "VTOLPlane"
+        elif (self.name == "VTOL Quad Tailsitter"):
+            return "VTOLQuadRotorTailSitter"
+        elif (self.name == "VTOL Tiltrotor"):
+            return "VTOLTiltRotor"
+        elif (self.name == "Coaxial Helicopter"):
+            return "HelicopterCoaxial"
+        elif (self.name == "Helicopter"):
+            return "Helicopter"
+        elif (self.name == "Hexarotor Coaxial"):
+            return "Y6B"
+        elif (self.name == "Y6A"):
+            return "Y6A"
+        elif (self.name == "Tricopter Y-"):
+            return "YMinus"
+        elif (self.name == "Tricopter Y+"):
+            return "YPlus"
+        elif (self.name == "Rover"):
+            return "Rover"
+        elif (self.name == "Boat"):
+            return "Boat"
+        return "AirframeUnknown"
+
     def GetParams(self):
         """
         Returns the parsed list of parameters. Every parameter is a Parameter
@@ -44,15 +102,25 @@ class Parameter(object):
         "min": 5,
         "max": 4,
         "unit": 3,
+        "AUX1": -10,
+        "AUX2": -10,
+        "AUX3": -10,
+        "AUX4": -10,
+        "AUX5": -10,
+        "AUX6": -10,
+        "AUX7": -10,
+        "AUX8": -10,
         # all others == 0 (sorted alphabetically)
     }
 
-    def __init__(self, path, name, airframe_type, airframe_id, maintainer):
+    def __init__(self, path, name, airframe_type, airframe_class, airframe_id, maintainer):
         self.fields = {}
         self.outputs = {}
+        self.archs = {}
         self.path = path
         self.name = name
         self.type = airframe_type
+        self.af_class = airframe_class
         self.id = airframe_id
         self.maintainer = maintainer
 
@@ -64,6 +132,9 @@ class Parameter(object):
 
     def GetType(self):
         return self.type
+
+    def GetClass(self):
+        return self.af_class
 
     def GetId(self):
         return self.id
@@ -82,6 +153,12 @@ class Parameter(object):
         Set named output value
         """
         self.outputs[code] = value
+
+    def SetArch(self, code, value):
+        """
+        Set named arch value
+        """
+        self.archs[code] = value
 
     def GetFieldCodes(self):
         """
@@ -121,6 +198,25 @@ class Parameter(object):
                 return ""
         return self.outputs.get(code)
 
+    def GetArchCodes(self):
+        """
+        Return list of existing arch codes in convenient order
+        """
+        keys = self.archs.keys()
+        keys = sorted(keys)
+        keys = sorted(keys, key=lambda x: self.priority.get(x, 0), reverse=True)
+        return keys
+
+    def GetArchValue(self, code):
+        """
+        Return value of the given arch code or None if not found.
+        """
+        fv =  self.archs.get(code)
+        if not fv:
+                # required because python 3 sorted does not accept None
+                return ""
+        return self.archs.get(code)
+
 class SourceParser(object):
     """
     Parses provided data and stores all found parameters internally.
@@ -136,7 +232,7 @@ class SourceParser(object):
     re_remove_dots = re.compile(r'\.+$')
     re_remove_carriage_return = re.compile('\n+')
 
-    valid_tags = set(["url", "maintainer", "output", "name", "type"])
+    valid_tags = set(["url", "maintainer", "output", "arch", "name", "type"])
 
     # Order of parameter groups
     priority = {
@@ -173,6 +269,7 @@ class SourceParser(object):
         state = None
         tags = {}
         outputs = {}
+        archs = {}
         for line in self.re_split_lines.split(contents):
             line = line.strip()
             # Ignore empty lines
@@ -204,6 +301,9 @@ class SourceParser(object):
                             if (tag == "output"):
                                 key, text = desc.split(' ', 1)
                                 outputs[key] = text;
+                            elif (tag == "board"):
+                                key, text = desc.split(' ', 1)
+                                archs[key] = text;
                             else:
                                 tags[tag] = desc
                             current_tag = tag
@@ -241,6 +341,7 @@ class SourceParser(object):
         airframe_type = None
         maintainer = "John Doe <john@example.com>"
         airframe_name = None
+        airframe_class = None
 
         # Done with file, store
         for tag in tags:
@@ -248,6 +349,8 @@ class SourceParser(object):
                 maintainer = tags[tag]
             elif tag == "type":
                 airframe_type = tags[tag]
+            elif tag == "class":
+                airframe_class = tags[tag]
             elif tag == "name":
                 airframe_name = tags[tag]
             elif tag not in self.valid_tags:
@@ -259,12 +362,16 @@ class SourceParser(object):
             sys.stderr.write("Aborting due to missing @type tag in file: '%s'\n" % path)
             return False
 
+        if airframe_class == None:
+            sys.stderr.write("Aborting due to missing @class tag in file: '%s'\n" % path)
+            return False
+
         if airframe_name == None:
             sys.stderr.write("Aborting due to missing @name tag in file: '%s'\n" % path)
             return False
 
         # We already know this is an airframe config, so add it
-        param = Parameter(path, airframe_name, airframe_type, airframe_id, maintainer)
+        param = Parameter(path, airframe_name, airframe_type, airframe_class, airframe_id, maintainer)
 
         # Done with file, store
         for tag in tags:
@@ -272,6 +379,8 @@ class SourceParser(object):
                 maintainer = tags[tag]
             if tag == "type":
                 airframe_type = tags[tag]
+            if tag == "class":
+                airframe_class = tags[tag]
             if tag == "name":
                 airframe_name = tags[tag]
             else:
@@ -281,13 +390,17 @@ class SourceParser(object):
         for output in outputs:
             param.SetOutput(output, outputs[output])
 
+        # Store outputs
+        for arch in archs:
+            param.SetArch(arch, archs[arch])
+
         # Store the parameter
         if airframe_type not in self.param_groups:
             self.param_groups[airframe_type] = ParameterGroup(airframe_type)
         self.param_groups[airframe_type].AddParameter(param)
 
         return True
-    
+
     def IsNumber(self, numberString):
         try:
             float(numberString)

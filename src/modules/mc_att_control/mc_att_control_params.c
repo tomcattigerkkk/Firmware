@@ -40,94 +40,18 @@
  */
 
 /**
- * Roll time constant
- *
- * Reduce if the system is too twitchy, increase if the response is too slow and sluggish.
- *
- * @unit s
- * @min 0.15
- * @max 0.25
- * @decimal 2
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_ROLL_TC, 0.2f);
-
-/**
- * Pitch time constant
- *
- * Reduce if the system is too twitchy, increase if the response is too slow and sluggish.
- *
- * @unit s
- * @min 0.15
- * @max 0.25
- * @decimal 2
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_PITCH_TC, 0.2f);
-
-/**
  * Roll P gain
  *
  * Roll proportional gain, i.e. desired angular speed in rad/s for error 1 rad.
  *
+ * @unit 1/s
  * @min 0.0
- * @max 8
+ * @max 12
  * @decimal 2
  * @increment 0.1
  * @group Multicopter Attitude Control
  */
 PARAM_DEFINE_FLOAT(MC_ROLL_P, 6.5f);
-
-/**
- * Roll rate P gain
- *
- * Roll rate proportional gain, i.e. control output for angular speed error 1 rad/s.
- *
- * @min 0.0
- * @max 0.5
- * @decimal 3
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_ROLLRATE_P, 0.15f);
-
-/**
- * Roll rate I gain
- *
- * Roll rate integral gain. Can be set to compensate static thrust difference or gravity center offset.
- *
- * @min 0.0
- * @decimal 3
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_ROLLRATE_I, 0.05f);
-
-/**
- * Roll rate D gain
- *
- * Roll rate differential gain. Small values help reduce fast oscillations. If value is too big oscillations will appear again.
- *
- * @min 0.0
- * @max 0.01
- * @decimal 4
- * @increment 0.0005
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_ROLLRATE_D, 0.003f);
-
-/**
- * Roll rate feedforward
- *
- * Improves tracking performance.
- *
- * @min 0.0
- * @decimal 4
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_ROLLRATE_FF, 0.0f);
 
 /**
  * Pitch P gain
@@ -136,60 +60,12 @@ PARAM_DEFINE_FLOAT(MC_ROLLRATE_FF, 0.0f);
  *
  * @unit 1/s
  * @min 0.0
- * @max 10
+ * @max 12
  * @decimal 2
- * @increment 0.0005
+ * @increment 0.1
  * @group Multicopter Attitude Control
  */
 PARAM_DEFINE_FLOAT(MC_PITCH_P, 6.5f);
-
-/**
- * Pitch rate P gain
- *
- * Pitch rate proportional gain, i.e. control output for angular speed error 1 rad/s.
- *
- * @min 0.0
- * @max 0.6
- * @decimal 3
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_PITCHRATE_P, 0.15f);
-
-/**
- * Pitch rate I gain
- *
- * Pitch rate integral gain. Can be set to compensate static thrust difference or gravity center offset.
- *
- * @min 0.0
- * @decimal 3
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_PITCHRATE_I, 0.05f);
-
-/**
- * Pitch rate D gain
- *
- * Pitch rate differential gain. Small values help reduce fast oscillations. If value is too big oscillations will appear again.
- *
- * @min 0.0
- * @decimal 4
- * @increment 0.0005
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_PITCHRATE_D, 0.003f);
-
-/**
- * Pitch rate feedforward
- *
- * Improves tracking performance.
- *
- * @min 0.0
- * @decimal 4
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_PITCHRATE_FF, 0.0f);
 
 /**
  * Yaw P gain
@@ -206,75 +82,37 @@ PARAM_DEFINE_FLOAT(MC_PITCHRATE_FF, 0.0f);
 PARAM_DEFINE_FLOAT(MC_YAW_P, 2.8f);
 
 /**
- * Yaw rate P gain
+ * Yaw weight
  *
- * Yaw rate proportional gain, i.e. control output for angular speed error 1 rad/s.
+ * A fraction [0,1] deprioritizing yaw compared to roll and pitch in non-linear attitude control.
+ * Deprioritizing yaw is necessary because multicopters have much less control authority
+ * in yaw compared to the other axes and it makes sense because yaw is not critical for
+ * stable hovering or 3D navigation.
  *
- * @min 0.0
- * @max 0.6
- * @decimal 2
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_YAWRATE_P, 0.2f);
-
-/**
- * Yaw rate I gain
+ * For yaw control tuning use MC_YAW_P. This ratio has no inpact on the yaw gain.
  *
- * Yaw rate integral gain. Can be set to compensate static thrust difference or gravity center offset.
- *
- * @min 0.0
- * @decimal 2
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_YAWRATE_I, 0.1f);
-
-/**
- * Yaw rate D gain
- *
- * Yaw rate differential gain. Small values help reduce fast oscillations. If value is too big oscillations will appear again.
- *
- * @min 0.0
- * @decimal 2
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_YAWRATE_D, 0.0f);
-
-/**
- * Yaw rate feedforward
- *
- * Improves tracking performance.
- *
- * @min 0.0
- * @decimal 4
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_YAWRATE_FF, 0.0f);
-
-/**
- * Yaw feed forward
- *
- * Feed forward weight for manual yaw control. 0 will give slow responce and no overshot, 1 - fast responce and big overshot.
- *
+ * @unit 1/s
  * @min 0.0
  * @max 1.0
  * @decimal 2
- * @increment 0.01
+ * @increment 0.1
  * @group Multicopter Attitude Control
  */
-PARAM_DEFINE_FLOAT(MC_YAW_FF, 0.5f);
+PARAM_DEFINE_FLOAT(MC_YAW_WEIGHT, 0.4f);
 
 /**
  * Max roll rate
  *
- * Limit for roll rate, has effect for large rotations in autonomous mode, to avoid large control output and mixer saturation.
+ * Limit for roll rate in manual and auto modes (except acro).
+ * Has effect for large rotations in autonomous mode, to avoid large control
+ * output and mixer saturation.
+ *
+ * This is not only limited by the vehicle's properties, but also by the maximum
+ * measurement rate of the gyro.
  *
  * @unit deg/s
  * @min 0.0
- * @max 360.0
+ * @max 1800.0
  * @decimal 1
  * @increment 5
  * @group Multicopter Attitude Control
@@ -284,11 +122,16 @@ PARAM_DEFINE_FLOAT(MC_ROLLRATE_MAX, 220.0f);
 /**
  * Max pitch rate
  *
- * Limit for pitch rate, has effect for large rotations in autonomous mode, to avoid large control output and mixer saturation.
+ * Limit for pitch rate in manual and auto modes (except acro).
+ * Has effect for large rotations in autonomous mode, to avoid large control
+ * output and mixer saturation.
+ *
+ * This is not only limited by the vehicle's properties, but also by the maximum
+ * measurement rate of the gyro.
  *
  * @unit deg/s
  * @min 0.0
- * @max 360.0
+ * @max 1800.0
  * @decimal 1
  * @increment 5
  * @group Multicopter Attitude Control
@@ -298,69 +141,14 @@ PARAM_DEFINE_FLOAT(MC_PITCHRATE_MAX, 220.0f);
 /**
  * Max yaw rate
  *
- * A value of significantly over 120 degrees per second can already lead to mixer saturation.
- *
  * @unit deg/s
  * @min 0.0
- * @max 360.0
+ * @max 1800.0
  * @decimal 1
  * @increment 5
  * @group Multicopter Attitude Control
  */
 PARAM_DEFINE_FLOAT(MC_YAWRATE_MAX, 200.0f);
-
-/**
- * Max yaw rate in auto mode
- *
- * Limit for yaw rate, has effect for large rotations in autonomous mode,
- * to avoid large control output and mixer saturation. A value of significantly
- * over 60 degrees per second can already lead to mixer saturation.
- * A value of 30 degrees / second is recommended to avoid very audible twitches.
- *
- * @unit deg/s
- * @min 0.0
- * @max 120.0
- * @decimal 1
- * @increment 5
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_YAWRAUTO_MAX, 45.0f);
-
-/**
- * Max acro roll rate
- *
- * @unit deg/s
- * @min 0.0
- * @max 1000.0
- * @decimal 1
- * @increment 5
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_ACRO_R_MAX, 360.0f);
-
-/**
- * Max acro pitch rate
- *
- * @unit deg/s
- * @min 0.0
- * @max 1000.0
- * @decimal 1
- * @increment 5
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_ACRO_P_MAX, 360.0f);
-
-/**
- * Max acro yaw rate
- *
- * @unit deg/s
- * @min 0.0
- * @max 1000.0
- * @decimal 1
- * @increment 5
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_ACRO_Y_MAX, 360.0f);
 
 /**
  * Threshold for Rattitude mode
@@ -374,4 +162,16 @@ PARAM_DEFINE_FLOAT(MC_ACRO_Y_MAX, 360.0f);
  * @increment 0.01
  * @group Multicopter Attitude Control
  */
-PARAM_DEFINE_FLOAT(MC_RATT_TH, 1.0f);
+PARAM_DEFINE_FLOAT(MC_RATT_TH, 0.8f);
+
+/**
+ * Manual tilt input filter time constant
+ * Setting this parameter to 0 disables the filter
+ *
+ * @unit s
+ * @min 0.0
+ * @max 2.0
+ * @decimal 2
+ * @group Multicopter Position Control
+ */
+PARAM_DEFINE_FLOAT(MC_MAN_TILT_TAU, 0.0f);

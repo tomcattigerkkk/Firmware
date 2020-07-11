@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2013-2015 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2013-2016 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,95 +33,58 @@
 
 /**
  * @file FixedwingLandDetector.h
- * Land detection algorithm for fixedwing
+ * Land detector implementation for fixedwing.
  *
  * @author Johan Jansen <jnsn.johan@gmail.com>
+ * @author Morten Lysgaard <morten@lysgaard.no>
+ * @author Julian Oes <julian@oes.ch>
  */
 
-#ifndef __FIXED_WING_LAND_DETECTOR_H__
-#define __FIXED_WING_LAND_DETECTOR_H__
+#pragma once
+
+#include <matrix/math.hpp>
+#include <uORB/topics/airspeed_validated.h>
 
 #include "LandDetector.h"
-#include <uORB/topics/control_state.h>
-#include <uORB/topics/actuator_armed.h>
-#include <uORB/topics/parameter_update.h>
-#include <uORB/topics/vehicle_status.h>
-#include <uORB/topics/airspeed.h>
-#include <systemlib/param/param.h>
 
-namespace landdetection
+using namespace time_literals;
+
+namespace land_detector
 {
 
-class FixedwingLandDetector : public LandDetector
+class FixedwingLandDetector final : public LandDetector
 {
 public:
 	FixedwingLandDetector();
+	~FixedwingLandDetector() override = default;
 
 protected:
-	/**
-	* @brief  blocking loop, should be run in a separate thread or task. Runs at 50Hz
-	**/
-	LandDetectionResult update() override;
 
-	/**
-	* @brief Initializes the land detection algorithm
-	**/
-	void initialize() override;
-
-	/**
-	* @brief  polls all subscriptions and pulls any data that has changed
-	**/
-	void updateSubscriptions();
-
-	/**
-	* @brief get UAV landed state
-	**/
-	bool get_landed_state();
-
-	/**
-	* @brief returns true if UAV is in free-fall state
-	**/
-	bool get_freefall_state();
+	bool _get_landed_state() override;
+	void _update_topics() override;
 
 private:
-	/**
-	* @brief download and update local parameter cache
-	**/
-	void updateParameterCache(const bool force);
 
-	/**
-	* @brief Handles for interesting parameters
-	**/
-	struct {
-		param_t maxVelocity;
-		param_t maxClimbRate;
-		param_t maxAirSpeed;
-		param_t maxIntVelocity;
-	}		_paramHandle;
+	/** Time in us that landing conditions have to hold before triggering a land. */
+	static constexpr hrt_abstime LANDED_TRIGGER_TIME_US = 2_s;
+	static constexpr hrt_abstime FLYING_TRIGGER_TIME_US = 0_us;
 
-	struct {
-		float maxVelocity;
-		float maxClimbRate;
-		float maxAirSpeed;
-		float maxIntVelocity;
-	} _params;
+	uORB::Subscription _airspeed_validated_sub{ORB_ID(airspeed_validated)};
 
-private:
-	int					_controlStateSub;	/**< notification of local position */
-	int					_armingSub;
-	int					_airspeedSub;
-	struct control_state_s			_controlState;		/**< the result from local position subscription */
-	struct actuator_armed_s			_arming;
-	struct airspeed_s			_airspeed;
-	int 					_parameterSub;
+	airspeed_validated_s _airspeed_validated{};
 
-	float _velocity_xy_filtered;
-	float _velocity_z_filtered;
-	float _airspeed_filtered;
-	float _accel_horz_lp;
-	uint64_t _landDetectTrigger;
+	float _airspeed_filtered{0.0f};
+	float _velocity_xy_filtered{0.0f};
+	float _velocity_z_filtered{0.0f};
+	float _xy_accel_filtered{0.0f};
+
+	DEFINE_PARAMETERS_CUSTOM_PARENT(
+		LandDetector,
+		(ParamFloat<px4::params::LNDFW_XYACC_MAX>)  _param_lndfw_xyaccel_max,
+		(ParamFloat<px4::params::LNDFW_AIRSPD_MAX>) _param_lndfw_airspd,
+		(ParamFloat<px4::params::LNDFW_VEL_XY_MAX>) _param_lndfw_vel_xy_max,
+		(ParamFloat<px4::params::LNDFW_VEL_Z_MAX>)  _param_lndfw_vel_z_max
+	);
 };
 
-}
-
-#endif //__FIXED_WING_LAND_DETECTOR_H__
+} // namespace land_detector

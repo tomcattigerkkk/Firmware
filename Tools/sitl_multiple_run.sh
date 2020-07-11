@@ -1,52 +1,35 @@
 #!/bin/bash
+# run multiple instances of the 'px4' binary, but w/o starting the simulator.
+# It assumes px4 is already built, with 'make px4_sitl_default'
+
+# The simulator is expected to send to TCP port 4560+i for i in [0, N-1]
+# For example jmavsim can be run like this:
+#./Tools/jmavsim_run.sh -p 4561 -l
 
 sitl_num=2
+[ -n "$1" ] && sitl_num="$1"
 
-sim_port=15019
-mav_port=15010
-mav_port2=15011
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+src_path="$SCRIPT_DIR/.."
 
-mav_oport=15015
-mav_oport2=15016
+build_path=${src_path}/build/px4_sitl_default
 
-port_step=10
+echo "killing running instances"
+pkill -x px4 || true
 
-src_path=`pwd`
+sleep 1
 
-rc_script="posix-configs/SITL/init/rcS_multiple"
-build_path=${src_path}/build_posix_sitl_default
+export PX4_SIM_MODEL=iris
 
-pkill mainapp
-sleep 2
+n=0
+while [ $n -lt $sitl_num ]; do
+	working_dir="$build_path/instance_$n"
+	[ ! -d "$working_dir" ] && mkdir -p "$working_dir"
 
-cd $build_path/src/firmware/posix
+	pushd "$working_dir" &>/dev/null
+	echo "starting instance $n in $(pwd)"
+	../bin/px4 -i $n -d "$src_path/ROMFS/px4fmu_common" -s etc/init.d-posix/rcS >out.log 2>err.log &
+	popd &>/dev/null
 
-user=`whoami`
-n=1
-while [ $n -le $sitl_num ]; do
- if [ ! -d $n ]; then
-  mkdir -p $n
-  cd $n
-
-  mkdir -p rootfs/fs/microsd
-  mkdir -p rootfs/eeprom
-  touch rootfs/eeprom/parameters
-
-  cp ${src_path}/ROMFS/px4fmu_common/mixers/quad_w.main.mix ./
-  cat ${src_path}/${rc_script}_gazebo_iris | sed s/_SIMPORT_/${sim_port}/ | sed s/_MAVPORT_/${mav_port}/g | sed s/_MAVOPORT_/${mav_oport}/ | sed s/_MAVPORT2_/${mav_port2}/ | sed s/_MAVOPORT2_/${mav_oport2}/ > rcS
-  cd ../
- fi
-
- cd $n
-
- sudo -b -u $user ../mainapp -d rcS >out.log 2>err.log
-
- cd ../
-
- n=$(($n + 1))
- sim_port=$(($sim_port + $port_step))
- mav_port=$(($mav_port + $port_step))
- mav_port2=$(($mav_port2 + $port_step))
- mav_oport=$(($mav_oport + $port_step))
- mav_oport2=$(($mav_oport2 + $port_step))
+	n=$(($n + 1))
 done

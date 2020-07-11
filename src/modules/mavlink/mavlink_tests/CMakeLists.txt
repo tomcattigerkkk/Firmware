@@ -30,20 +30,24 @@
 # POSSIBILITY OF SUCH DAMAGE.
 #
 ############################################################################
+
+include_directories(${PX4_SOURCE_DIR}/mavlink/include/mavlink)
+
 px4_add_module(
 	MODULE modules__mavlink__mavlink_tests
 	MAIN mavlink_tests
 	STACK_MAIN 5000
 	COMPILE_FLAGS
 		-DMAVLINK_FTP_UNIT_TEST
-		-Os
+		#-DMAVLINK_FTP_DEBUG
+		-DMavlinkStream=MavlinkStreamTest
+		-DMavlinkFTP=MavlinkFTPTest
+		-Wno-cast-align # TODO: fix and enable
+		-Wno-address-of-packed-member # TODO: fix in c_library_v2
+		-Wno-double-promotion # The fix has been proposed as PR upstream (2020-03-08)
 	SRCS
 		mavlink_tests.cpp
 		mavlink_ftp_test.cpp
 		../mavlink_stream.cpp
 		../mavlink_ftp.cpp
-		../mavlink.c
-	DEPENDS
-		platforms__common
 	)
-# vim: set noet ft=cmake fenc=utf-8 ff=unix : 

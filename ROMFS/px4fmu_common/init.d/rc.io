@@ -1,21 +1,26 @@
+#!/bin/sh
 #
-# Init PX4IO interface
+# PX4IO interface init script.
 #
 
-#
-# Allow PX4IO to recover from midair restarts.
-#
-px4io recovery
-
-#
-# Adjust PX4IO update rate limit
-#
-set PX4IO_LIMIT 400
-if ver hwcmp PX4FMU_V1
+# If $OUTPUT_MODE indicated Hardware-int-the-loop simulation, px4io should not publish actuator_outputs,
+# instead, pwm_out_sim will publish that uORB
+if [ $OUTPUT_MODE = hil ]
 then
-	set PX4IO_LIMIT 200
+    set HIL_ARG $OUTPUT_MODE
 fi
 
-if px4io limit $PX4IO_LIMIT
+if [ $IO_PRESENT = yes ]
 then
+	if px4io start $HIL_ARG
+	then
+		# Allow PX4IO to recover from midair restarts.
+		px4io recovery
+	
+		# Adjust PX4IO update rate limit.
+		px4io limit 400
+	else
+		echo "PX4IO start failed" >> $LOG_FILE
+		tune_control play -t 20
+	fi
 fi

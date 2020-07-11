@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012, 2013 PX4 Development Team. All rights reserved.
+ *   Copyright (C) 2012-2019 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,10 +34,7 @@
 /**
  * @file test_conv.cpp
  * Tests conversions used across the system.
- *
  */
-
-#include <px4_config.h>
 
 #include <sys/types.h>
 
@@ -48,18 +45,17 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#include "tests.h"
+#include "tests_main.h"
 
 #include <math.h>
 #include <float.h>
 
-#include <systemlib/err.h>
-#include <unit_test/unit_test.h>
+#include <unit_test.h>
 #include <px4iofirmware/protocol.h>
 
 int test_conv(int argc, char *argv[])
 {
-	PX4_INFO("Testing system conversions");
+	//PX4_INFO("Testing system conversions");
 
 	for (int i = -10000; i <= 10000; i += 1) {
 		float f = i / 10000.0f;
@@ -72,7 +68,7 @@ int test_conv(int argc, char *argv[])
 		}
 	}
 
-	PX4_INFO("All conversions clean");
+	//PX4_INFO("All conversions clean");
 
 	return 0;
 }

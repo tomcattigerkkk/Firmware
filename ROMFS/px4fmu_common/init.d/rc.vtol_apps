@@ -1,43 +1,32 @@
-#!nsh
+#!/bin/sh
 #
-# Standard apps for vtol:
-# att & pos estimator, att & pos control.
+# Standard apps for vtol: Attitude/Position estimator, Attitude/Position control.
 #
+# NOTE: Script variables are declared/initialized/unset in the rcS script.
 #
 
+###############################################################################
+#                       Begin Estimator group selection                       #
+###############################################################################
 
-#---------------------------------------
-# Estimator group selction
-#
-# INAV
-if param compare SYS_MC_EST_GROUP 0
-then
-	attitude_estimator_q start
-	position_estimator_inav start
-fi
+ekf2 start
 
-# LPE
-if param compare SYS_MC_EST_GROUP 1
-then
-	attitude_estimator_q start
-	local_position_estimator start
-fi
+###############################################################################
+#                        End Estimator group selection                        #
+###############################################################################
 
-# EKF
-if param compare SYS_MC_EST_GROUP 2
-then
-	ekf2 start
-fi
-#---------------------------------------
-
+airspeed_selector start
 
 vtol_att_control start
-mc_att_control start
-mc_pos_control start
-fw_att_control start
-fw_pos_control_l1 start
 
-#
+mc_rate_control start vtol
+mc_att_control start vtol
+mc_pos_control start vtol
+mc_hover_thrust_estimator start
+
+fw_att_control start vtol
+fw_pos_control_l1 start vtol
+
 # Start Land Detector
 # Multicopter for now until we have something for VTOL
 #

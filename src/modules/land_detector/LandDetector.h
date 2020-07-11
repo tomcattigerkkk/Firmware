@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2013-2015 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2013-2017 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,99 +33,159 @@
 
 /**
  * @file LandDetector.h
- * Abstract interface for land detector algorithms
+ * Land detector interface for multicopter, fixedwing and VTOL implementations.
  *
  * @author Johan Jansen <jnsn.johan@gmail.com>
+ * @author Julian Oes <julian@oes.ch>
+ * @author Lorenz Meier <lorenz@px4.io>
  */
 
-#ifndef __LAND_DETECTOR_H__
-#define __LAND_DETECTOR_H__
+#pragma once
 
-#include <px4_workqueue.h>
-#include <uORB/uORB.h>
+#include <float.h>
+#include <math.h>
+
+#include <lib/hysteresis/hysteresis.h>
+#include <lib/perf/perf_counter.h>
+#include <px4_platform_common/defines.h>
+#include <px4_platform_common/module.h>
+#include <px4_platform_common/module.h>
+#include <px4_platform_common/module_params.h>
+#include <px4_platform_common/module_params.h>
+#include <px4_platform_common/px4_config.h>
+#include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
+#include <uORB/Publication.hpp>
+#include <uORB/Subscription.hpp>
+#include <uORB/topics/actuator_armed.h>
+#include <uORB/topics/parameter_update.h>
+#include <uORB/topics/vehicle_acceleration.h>
 #include <uORB/topics/vehicle_land_detected.h>
+#include <uORB/topics/vehicle_local_position.h>
 
-namespace landdetection
+using namespace time_literals;
+
+namespace land_detector
 {
 
-enum LandDetectionResult {
-	LANDDETECTION_RES_FLYING = 0,	/**< UAV is flying */
-	LANDDETECTION_RES_LANDED = 1,	/**< Land has been detected */
-	LANDDETECTION_RES_FREEFALL = 2	/**< Free-fall has been detected */
-};
-
-class LandDetector
+class LandDetector : public ModuleBase<LandDetector>, ModuleParams, px4::ScheduledWorkItem
 {
 public:
 
 	LandDetector();
 	virtual ~LandDetector();
 
-	/**
-	 * @return true if this task is currently running
-	 **/
-	inline bool isRunning() const {return _taskIsRunning;}
+
+	/** @see ModuleBase */
+	static int custom_command(int argc, char *argv[])
+	{
+		return print_usage("unknown command");
+	}
+
+	/** @see ModuleBase */
+	static int print_usage(const char *reason = nullptr);
+
+	/** @see ModuleBase::print_status() */
+	int print_status() override;
 
 	/**
-	 * @return the current landed state
+	 * Get the work queue going.
 	 */
-	bool isLanded() { return _landDetected.landed; }
+	void start();
 
-	/**
-	 * @brief  Tells the Land Detector task that it should exit
-	 **/
-	void shutdown();
-
-	/**
-	 * @brief Blocking function that should be called from it's own task thread. This method will
-	 *        run the underlying algorithm at the desired update rate and publish if the landing state changes.
-	 **/
-	int start();
-
-	static void	cycle_trampoline(void *arg);
+	static int task_spawn(int argc, char *argv[]);
 
 protected:
 
 	/**
-	* @brief Pure abstract method that must be overriden by sub-classes. This actually runs the underlying algorithm
-	* @return true if a landing was detected and this should be broadcast to the rest of the system
-	**/
-	virtual LandDetectionResult update() = 0;
+	 * Updates parameters.
+	 */
+	virtual void _update_params();
 
 	/**
-	* @brief Pure abstract method that is called by this class once for initializing the uderlying algorithm (memory allocation,
-	*        uORB topic subscription, creating file descriptors, etc.)
-	**/
-	virtual void initialize() = 0;
+	 * Updates subscribed uORB topics.
+	 */
+	virtual void _update_topics();
 
 	/**
-	* @brief Convenience function for polling uORB subscriptions
-	* @return true if there was new data and it was successfully copied
-	**/
-	bool orb_update(const struct orb_metadata *meta, int handle, void *buffer);
+	 * @return true if UAV is in a landed state.
+	 */
+	virtual bool _get_landed_state() = 0;
 
-	static constexpr uint32_t LAND_DETECTOR_UPDATE_RATE = 50;        /**< Run algorithm at 50Hz */
+	/**
+	 * @return true if UAV is in almost landed state
+	 */
+	virtual bool _get_maybe_landed_state() { return false; }
 
-	static constexpr uint64_t LAND_DETECTOR_TRIGGER_TIME = 2000000;  /**< usec that landing conditions have to hold
-                                                                          before triggering a land */
-	static constexpr uint64_t LAND_DETECTOR_ARM_PHASE_TIME =
-		2000000;	/**< time interval in which wider acceptance thresholds are used after arming */
+	/**
+	 * @return true if UAV is touching ground but not landed
+	 */
+	virtual bool _get_ground_contact_state() { return false; }
 
-protected:
-	orb_advert_t				_landDetectedPub;		/**< publisher for position in local frame */
-	struct vehicle_land_detected_s		_landDetected;			/**< local vehicle position */
-	uint64_t				_arming_time;			/**< timestamp of arming time */
-	LandDetectionResult
-	_state;		/**< Result of land detection. Can be LANDDETECTION_RES_FLYING, LANDDETECTION_RES_LANDED or LANDDETECTION_RES_FREEFALL */
+	/**
+	 * @return true if UAV is in free-fall state.
+	 */
+	virtual bool _get_freefall_state() { return false; }
+
+	/**
+	 *  @return maximum altitude that can be reached
+	 */
+	virtual float _get_max_altitude() { return INFINITY; }
+
+	/**
+	 *  @return true if vehicle could be in ground effect (close to ground)
+	 */
+	virtual bool _get_ground_effect_state() { return false; }
+
+	/** Run main land detector loop at this interval. */
+	static constexpr uint32_t LAND_DETECTOR_UPDATE_INTERVAL = 20_ms;
+
+	systemlib::Hysteresis _freefall_hysteresis{false};
+	systemlib::Hysteresis _landed_hysteresis{true};
+	systemlib::Hysteresis _maybe_landed_hysteresis{true};
+	systemlib::Hysteresis _ground_contact_hysteresis{true};
+	systemlib::Hysteresis _ground_effect_hysteresis{false};
+
+	actuator_armed_s         _actuator_armed{};
+	vehicle_acceleration_s   _vehicle_acceleration{};
+
+	vehicle_land_detected_s _land_detected = {
+		.timestamp = 0,
+		.alt_max = -1.0f,
+		.freefall = false,
+		.ground_contact = true,
+		.maybe_landed = true,
+		.landed = true,
+	};
+
+	vehicle_local_position_s _vehicle_local_position{};
+
+	uORB::Publication<vehicle_land_detected_s> _vehicle_land_detected_pub{ORB_ID(vehicle_land_detected)};
 
 private:
-	bool _taskShouldExit;                                               /**< true if it is requested that this task should exit */
-	bool _taskIsRunning;                                                /**< task has reached main loop and is currently running */
-	struct work_s	_work;
 
-	void		cycle();
+	void Run() override;
+
+	void _update_state();
+
+	void _update_total_flight_time();
+
+	bool _previous_armed_state{false};	///< stores the previous actuator_armed.armed state
+
+	hrt_abstime _takeoff_time{0};
+	hrt_abstime _total_flight_time{0};	///< total vehicle flight time in microseconds
+
+	perf_counter_t _cycle_perf{perf_alloc(PC_ELAPSED, "land_detector_cycle")};
+
+	uORB::Subscription _actuator_armed_sub{ORB_ID(actuator_armed)};
+	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
+	uORB::Subscription _vehicle_acceleration_sub{ORB_ID(vehicle_acceleration)};
+	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
+
+	DEFINE_PARAMETERS_CUSTOM_PARENT(
+		ModuleParams,
+		(ParamInt<px4::params::LND_FLIGHT_T_HI>) _param_total_flight_time_high,
+		(ParamInt<px4::params::LND_FLIGHT_T_LO>) _param_total_flight_time_low
+	);
 };
 
-}
-
-#endif //__LAND_DETECTOR_H__
+} // namespace land_detector

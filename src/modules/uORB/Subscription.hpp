@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012-2015 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2019 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,169 +32,164 @@
  ****************************************************************************/
 
 /**
- * @file Subscription.h
+ * @file Subscription.hpp
  *
  */
 
 #pragma once
 
-#include <assert.h>
-
 #include <uORB/uORB.h>
-#include <containers/List.hpp>
-#include <systemlib/err.h>
+#include <uORB/topics/uORBTopics.hpp>
+
+#include <px4_platform_common/defines.h>
+#include <lib/mathlib/mathlib.h>
+
+#include "uORBDeviceNode.hpp"
+#include "uORBManager.hpp"
+#include "uORBUtils.hpp"
 
 namespace uORB
 {
 
-/**
- * Base subscription warapper class, used in list traversal
- * of various subscriptions.
- */
-class __EXPORT SubscriptionBase
+class SubscriptionCallback;
+
+// Base subscription wrapper class
+class Subscription
 {
 public:
-// methods
 
 	/**
 	 * Constructor
 	 *
-	 * @param meta The uORB metadata (usually from the ORB_ID()
-	 * 	macro) for the topic.
-	 * @param interval  The minimum interval in milliseconds
-	 * 	between updates
+	 * @param id The uORB ORB_ID enum for the topic.
 	 * @param instance The instance for multi sub.
 	 */
-	SubscriptionBase(const struct orb_metadata *meta,
-			 unsigned interval = 0, unsigned instance = 0);
+	Subscription(ORB_ID id, uint8_t instance = 0) :
+		_orb_id(id),
+		_instance(instance)
+	{
+	}
+
+	/**
+	 * Constructor
+	 *
+	 * @param meta The uORB metadata (usually from the ORB_ID() macro) for the topic.
+	 * @param instance The instance for multi sub.
+	 */
+	Subscription(const orb_metadata *meta, uint8_t instance = 0) :
+		_orb_id((meta == nullptr) ? ORB_ID::INVALID : static_cast<ORB_ID>(meta->o_id)),
+		_instance(instance)
+	{
+	}
+
+	~Subscription()
+	{
+		unsubscribe();
+	}
+
+	bool subscribe();
+	void unsubscribe();
+
+	bool valid() const { return _node != nullptr; }
+	bool advertised()
+	{
+		if (valid()) {
+			return _node->is_advertised();
+		}
+
+		// try to initialize
+		if (subscribe()) {
+			// check again if valid
+			if (valid()) {
+				return _node->is_advertised();
+			}
+		}
+
+		return false;
+	}
 
 	/**
 	 * Check if there is a new update.
 	 * */
-	bool updated();
+	bool updated() { return advertised() ? (_node->published_message_count() != _last_generation) : false; }
 
 	/**
 	 * Update the struct
 	 * @param data The uORB message struct we are updating.
 	 */
-	void update(void *data);
+	bool update(void *dst) { return updated() ? copy(dst) : false; }
 
 	/**
-	 * Deconstructor
+	 * Copy the struct
+	 * @param data The uORB message struct we are updating.
 	 */
-	virtual ~SubscriptionBase();
+	bool copy(void *dst) { return advertised() ? _node->copy(dst, _last_generation) : false; }
 
-// accessors
-	const struct orb_metadata *getMeta() { return _meta; }
-	int getHandle() { return _handle; }
+	uint8_t  get_instance() const { return _instance; }
+	unsigned get_last_generation() const { return _last_generation; }
+	ORB_PRIO get_priority() { return advertised() ? _node->get_priority() : ORB_PRIO_UNINITIALIZED; }
+	orb_id_t get_topic() const { return get_orb_meta(_orb_id); }
+
 protected:
-// accessors
-	void setHandle(int handle) { _handle = handle; }
-// attributes
-	const struct orb_metadata *_meta;
-	int _instance;
-	int _handle;
-private:
-	// disallow copy
-	SubscriptionBase(const SubscriptionBase &other);
-	// disallow assignment
-	SubscriptionBase &operator=(const SubscriptionBase &other);
+
+	friend class SubscriptionCallback;
+	friend class SubscriptionCallbackWorkItem;
+
+	DeviceNode *get_node() { return _node; }
+
+	DeviceNode *_node{nullptr};
+
+	unsigned _last_generation{0}; /**< last generation the subscriber has seen */
+
+	ORB_ID _orb_id{ORB_ID::INVALID};
+	uint8_t _instance{0};
 };
 
-/**
- * alias class name so it is clear that the base class
- */
-typedef SubscriptionBase SubscriptionTiny;
-
-/**
- * The subscription base class as a list node.
- */
-class __EXPORT SubscriptionNode :
-
-	public SubscriptionBase,
-	public ListNode<SubscriptionNode *>
+// Subscription wrapper class with data
+template<class T>
+class SubscriptionData : public Subscription
 {
 public:
 	/**
 	 * Constructor
 	 *
-	 * @param meta The uORB metadata (usually from the ORB_ID()
-	 * 	macro) for the topic.
-	 * @param interval  The minimum interval in milliseconds
-	 * 	between updates
+	 * @param id The uORB metadata ORB_ID enum for the topic.
 	 * @param instance The instance for multi sub.
-	 * @param list 	A pointer to a list of subscriptions
-	 * 	that this should be appended to.
 	 */
-	SubscriptionNode(const struct orb_metadata *meta,
-			 unsigned interval = 0,
-			 int instance = 0,
-			 List<SubscriptionNode *> *list = nullptr) :
-		SubscriptionBase(meta, interval, instance),
-		_interval(interval)
+	SubscriptionData(ORB_ID id, uint8_t instance = 0) :
+		Subscription(id, instance)
 	{
-		if (list != nullptr) { list->add(this); }
+		copy(&_data);
 	}
 
 	/**
-	 * This function is the callback for list traversal
-	 * updates, a child class must implement it.
-	 */
-	virtual void update() = 0;
-// accessors
-	unsigned getInterval() { return _interval; }
-protected:
-// attributes
-	unsigned _interval;
-
-};
-
-/**
- * Subscription wrapper class
- */
-template<class T>
-class __EXPORT Subscription :
-	public SubscriptionNode
-{
-public:
-	/**
 	 * Constructor
 	 *
-	 * @param meta The uORB metadata (usually from
-	 * 	the ORB_ID() macro) for the topic.
-	 * @param interval  The minimum interval in milliseconds
-	 * 	between updates
-	 * @param list A list interface for adding to
-	 * 	list during construction
+	 * @param meta The uORB metadata (usually from the ORB_ID() macro) for the topic.
+	 * @param instance The instance for multi sub.
 	 */
-	Subscription(const struct orb_metadata *meta,
-		     unsigned interval = 0,
-		     int instance = 0,
-		     List<SubscriptionNode *> *list = nullptr);
+	SubscriptionData(const orb_metadata *meta, uint8_t instance = 0) :
+		Subscription(meta, instance)
+	{
+		copy(&_data);
+	}
 
-	Subscription(const Subscription &);
+	~SubscriptionData() = default;
 
-	/**
-	 * Deconstructor
-	 */
-	virtual ~Subscription();
+	// no copy, assignment, move, move assignment
+	SubscriptionData(const SubscriptionData &) = delete;
+	SubscriptionData &operator=(const SubscriptionData &) = delete;
+	SubscriptionData(SubscriptionData &&) = delete;
+	SubscriptionData &operator=(SubscriptionData &&) = delete;
 
+	// update the embedded struct.
+	bool update() { return Subscription::update((void *)(&_data)); }
 
-	/**
-	 * Create an update function that uses the embedded struct.
-	 */
-	void update();
+	const T &get() const { return _data; }
 
-	/**
-	 * Create an update function that uses the embedded struct.
-	 */
-	bool check_updated();
-	/*
-	 * This function gets the T struct data
-	 * */
-	const T &get();
 private:
-	T _data;
+
+	T _data{};
 };
 
 } // namespace uORB

@@ -36,40 +36,33 @@
  * Remote Control calibration routine
  */
 
-#include <px4_posix.h>
-#include <px4_time.h>
+#include <px4_platform_common/posix.h>
+#include <px4_platform_common/time.h>
+#include <px4_platform_common/defines.h>
 
 #include "rc_calibration.h"
 #include "commander_helper.h"
 
-#include <poll.h>
-#include <unistd.h>
+#include <uORB/Subscription.hpp>
 #include <uORB/topics/sensor_combined.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <systemlib/mavlink_log.h>
-#include <systemlib/param/param.h>
+#include <parameters/param.h>
 #include <systemlib/err.h>
-
-/* oddly, ERROR is not defined for c++ */
-#ifdef ERROR
-# undef ERROR
-#endif
-static const int ERROR = -1;
 
 int do_trim_calibration(orb_advert_t *mavlink_log_pub)
 {
-	int sub_man = orb_subscribe(ORB_ID(manual_control_setpoint));
-	usleep(400000);
-	struct manual_control_setpoint_s sp;
-	bool changed;
-	orb_check(sub_man, &changed);
+	uORB::Subscription manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
+	px4_usleep(400000);
+	manual_control_setpoint_s manual_control_setpoint{};
+	bool changed = manual_control_setpoint_sub.updated();
 
 	if (!changed) {
 		mavlink_log_critical(mavlink_log_pub, "no inputs, aborting");
-		return ERROR;
+		return PX4_ERROR;
 	}
 
-	orb_copy(ORB_ID(manual_control_setpoint), sub_man, &sp);
+	manual_control_setpoint_sub.copy(&manual_control_setpoint);
 
 	/* load trim values which are active */
 	float roll_trim_active;
@@ -90,28 +83,23 @@ int do_trim_calibration(orb_advert_t *mavlink_log_pub)
 	/* set parameters: the new trim values are the combination of active trim values
 	   and the values coming from the remote control of the user
 	*/
-	float p = sp.y * roll_scale + roll_trim_active;
+	float p = manual_control_setpoint.y * roll_scale + roll_trim_active;
 	int p1r = param_set(param_find("TRIM_ROLL"), &p);
 	/*
 	 we explicitly swap sign here because the trim is added to the actuator controls
 	 which are moving in an inverse sense to manual pitch inputs
 	*/
-	p = -sp.x * pitch_scale + pitch_trim_active;
+	p = -manual_control_setpoint.x * pitch_scale + pitch_trim_active;
 	int p2r = param_set(param_find("TRIM_PITCH"), &p);
-	p = sp.r * yaw_scale + yaw_trim_active;
+	p = manual_control_setpoint.r * yaw_scale + yaw_trim_active;
 	int p3r = param_set(param_find("TRIM_YAW"), &p);
 
-	/* store to permanent storage */
-	/* auto-save */
-	int save_ret = param_save_default();
-
-	if (save_ret != 0 || p1r != 0 || p2r != 0 || p3r != 0) {
+	if (p1r != 0 || p2r != 0 || p3r != 0) {
 		mavlink_log_critical(mavlink_log_pub, "TRIM: PARAM SET FAIL");
-		px4_close(sub_man);
-		return ERROR;
+		return PX4_ERROR;
 	}
 
 	mavlink_log_info(mavlink_log_pub, "trim cal done");
-	px4_close(sub_man);
-	return OK;
+
+	return PX4_OK;
 }

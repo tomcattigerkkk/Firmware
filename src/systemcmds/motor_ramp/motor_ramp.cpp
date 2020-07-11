@@ -33,16 +33,17 @@
 
 /**
  * @file motor_ramp.cpp
- * Application to test motor ramp up.
  *
  * @author Andreas Antener <andreas@uaventure.com>
  * @author Roman Bapst <bapstroman@gmail.com>
  */
 
-#include <px4_config.h>
-#include <px4_defines.h>
-#include <px4_tasks.h>
-#include <px4_posix.h>
+#include <px4_platform_common/px4_config.h>
+#include <px4_platform_common/defines.h>
+#include <px4_platform_common/module.h>
+#include <px4_platform_common/tasks.h>
+#include <px4_platform_common/posix.h>
+#include <px4_platform_common/getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,13 +52,12 @@
 #include <math.h>
 #include <poll.h>
 
-#include <arch/board/board.h>
+
 #include <drivers/drv_hrt.h>
 #include <drivers/drv_pwm_output.h>
-#include <platforms/px4_defines.h>
 
-#include "systemlib/systemlib.h"
 #include "systemlib/err.h"
+#include "uORB/topics/actuator_controls.h"
 
 enum RampState {
 	RAMP_INIT,
@@ -79,7 +79,8 @@ static float _ramp_time;
 static int _min_pwm;
 static int _max_pwm;
 static Mode _mode;
-static char *_mode_c;
+static const char *_mode_c;
+static const char *_pwm_output_dev = "/dev/pwm_output0";
 
 /**
  * motor_ramp management function.
@@ -91,11 +92,11 @@ extern "C" __EXPORT int motor_ramp_main(int argc, char *argv[]);
  */
 int motor_ramp_thread_main(int argc, char *argv[]);
 
-bool min_pwm_valid(unsigned pwm_value);
+bool min_pwm_valid(int pwm_value);
 
-bool max_pwm_valid(unsigned pwm_value);
+bool max_pwm_valid(int pwm_value);
 
-int set_min_pwm(int fd, unsigned long max_channels, unsigned pwm_value);
+int set_min_pwm(int fd, unsigned long max_channels, int pwm_value);
 
 int set_out(int fd, unsigned long max_channels, float output);
 
@@ -113,13 +114,31 @@ usage(const char *reason)
 		PX4_ERR("%s", reason);
 	}
 
-	PX4_WARN("\n\nWARNING: motors will ramp up to full speed!\n\n"
-		 "Usage: motor_ramp <mode> <min_pwm> <time> [<max_pwm>]\n"
-		 "<mode> can be one of (ramp|sine|square)\n\n"
-		 "Example:\n"
-		 "sdlog2 on\n"
-		 "mc_att_control stop\n"
-		 "motor_ramp sine 1100 0.5\n");
+	PRINT_MODULE_DESCRIPTION(
+		R"DESCR_STR(
+### Description
+Application to test motor ramp up.
+
+Before starting, make sure to stop any running attitude controller:
+$ mc_rate_control stop
+$ fw_att_control stop
+
+When starting, a background task is started, runs for several seconds (as specified), then exits.
+
+### Example
+$ motor_ramp sine -a 1100 -r 0.5
+)DESCR_STR");
+
+
+	PRINT_MODULE_USAGE_NAME_SIMPLE("motor_ramp", "command");
+	PRINT_MODULE_USAGE_ARG("ramp|sine|square", "mode", false);
+	PRINT_MODULE_USAGE_PARAM_STRING('d', "/dev/pwm_output0", nullptr, "Pwm output device", true);
+	PRINT_MODULE_USAGE_PARAM_INT('a', 0, 900, 1500, "Select minimum pwm duty cycle in usec", false);
+	PRINT_MODULE_USAGE_PARAM_INT('b', 2000, 901, 2100, "Select maximum pwm duty cycle in usec", true);
+	PRINT_MODULE_USAGE_PARAM_FLOAT('r', 1.0f, 0.0f, 65536.0f, "Select motor ramp duration in sec", true);
+
+	PRINT_MODULE_USAGE_PARAM_COMMENT("WARNING: motors will ramp up to full speed!");
+
 }
 
 /**
@@ -132,10 +151,13 @@ usage(const char *reason)
  */
 int motor_ramp_main(int argc, char *argv[])
 {
-	if (argc < 4) {
-		usage("missing parameters");
-		return 1;
-	}
+	int myoptind = 1;
+	int ch;
+	const char *myoptarg = nullptr;
+	bool error_flag = false;
+	bool set_pwm_min = false;
+	_max_pwm = 2000;
+	_ramp_time = 1.0f;
 
 	if (_thread_running) {
 		PX4_WARN("motor_ramp already running\n");
@@ -143,81 +165,119 @@ int motor_ramp_main(int argc, char *argv[])
 		return 0;
 	}
 
-	if (!strcmp(argv[1], "ramp")) {
+	if (argc < 4) {
+		usage("missing parameters");
+		return 1;
+	}
+
+	while ((ch = px4_getopt(argc, argv, "d:a:b:r:", &myoptind, &myoptarg)) != EOF) {
+		switch (ch) {
+
+			case 'd':
+				if(!strcmp(myoptarg, "/dev/pwm_output0") || !strcmp(myoptarg, "/dev/pwm_output1")){
+					_pwm_output_dev = myoptarg;
+				} else {
+					usage("pwm output device not found");
+					error_flag = true;
+				}
+				break;
+
+			case 'a':
+				_min_pwm = atoi(myoptarg);
+
+				if (!min_pwm_valid(_min_pwm)) {
+					usage("min PWM not in range");
+					error_flag = true;
+				} else {
+					set_pwm_min = true;
+				}
+
+				break;
+
+			case 'b':
+				_max_pwm = atoi(myoptarg);
+
+				if (!max_pwm_valid(_max_pwm)) {
+					usage("max PWM not in range");
+					error_flag = true;
+				}
+
+				break;
+
+			case 'r':
+				_ramp_time = atof(myoptarg);
+
+				if (_ramp_time <= 0) {
+					usage("ramp time must be greater than 0");
+					error_flag = true;
+				}
+
+				break;
+
+			default:
+				PX4_WARN("unrecognized flag");
+				error_flag = true;
+				break;
+		}
+	}
+
+	_thread_should_exit = false;
+
+	if(!set_pwm_min){
+		PX4_WARN("pwm_min not set. use -a flag");
+		error_flag = true;
+	}
+
+
+	if (!strcmp(argv[myoptind], "ramp")) {
 		_mode = RAMP;
 
-	} else if (!strcmp(argv[1], "sine")) {
+	} else if (!strcmp(argv[myoptind], "sine")) {
 		_mode = SINE;
 
-	} else if (!strcmp(argv[1], "square")) {
+	} else if (!strcmp(argv[myoptind], "square")) {
 		_mode = SQUARE;
 
 	} else {
 		usage("selected mode not valid");
+		error_flag = true;
+	}
+
+	_mode_c = myoptarg;
+
+	if(error_flag){
 		return 1;
 	}
 
-	_mode_c = argv[1];
-
-	_min_pwm = atoi(argv[2]);
-
-	if (!min_pwm_valid(_min_pwm)) {
-		usage("min PWM not in range");
-		return 1;
-	}
-
-	_ramp_time = atof(argv[3]);
-
-	if (argc > 4) {
-		_max_pwm = atoi(argv[4]);
-
-		if (!max_pwm_valid(_max_pwm)) {
-			usage("max PWM not in range");
-			return 1;
-		}
-
-	} else {
-		_max_pwm = 2000;
-	}
-
-	if (!(_ramp_time > 0)) {
-		usage("ramp time must be greater than 0");
-		return 1;
-	}
-
-	_thread_should_exit = false;
 	_motor_ramp_task = px4_task_spawn_cmd("motor_ramp",
 					      SCHED_DEFAULT,
 					      SCHED_PRIORITY_DEFAULT + 40,
 					      2000,
 					      motor_ramp_thread_main,
-					      (argv) ? (char *const *)&argv[2] : (char *const *)NULL);
-	return 0;
+					      (argv) ? (char *const *)&argv[2] : (char *const *)nullptr);
 
-	usage("unrecognized command");
-	return 1;
+	return 0;
 }
 
-bool min_pwm_valid(unsigned pwm_value)
+bool min_pwm_valid(int pwm_value)
 {
 	return pwm_value >= 900 && pwm_value <= 1500;
 }
 
-bool max_pwm_valid(unsigned pwm_value)
+bool max_pwm_valid(int pwm_value)
 {
 	return pwm_value <= 2100 && pwm_value > _min_pwm;
 }
 
-int set_min_pwm(int fd, unsigned long max_channels, unsigned pwm_value)
+int set_min_pwm(int fd, unsigned long max_channels, int pwm_value)
 {
 	int ret;
 
-	struct pwm_output_values pwm_values;
-	memset(&pwm_values, 0, sizeof(pwm_values));
+	struct pwm_output_values pwm_values {};
 
 	pwm_values.channel_count = max_channels;
 
-	for (int i = 0; i < max_channels; i++) {
+	for (unsigned i = 0; i < max_channels; i++) {
 		pwm_values.values[i] = pwm_value;
 	}
 
@@ -259,7 +319,7 @@ int prepare(int fd, unsigned long *max_channels)
 	orb_copy(ORB_ID_VEHICLE_ATTITUDE_CONTROLS, act_sub, &actuators);
 
 	/* wait 50 ms */
-	usleep(50000);
+	px4_usleep(50000);
 
 	/* now expect nothing changed on that topic */
 	bool orb_updated;
@@ -267,7 +327,7 @@ int prepare(int fd, unsigned long *max_channels)
 
 	if (orb_updated) {
 		PX4_ERR("ABORTING! Attitude control still active. Please ensure to shut down all controllers:\n"
-			"\tmc_att_control stop\n"
+			"\tmc_rate_control stop\n"
 			"\tfw_att_control stop\n");
 		return 1;
 	}
@@ -303,13 +363,52 @@ int motor_ramp_thread_main(int argc, char *argv[])
 {
 	_thread_running = true;
 
-	char *dev = PWM_OUTPUT0_DEVICE_PATH;
 	unsigned long max_channels = 0;
+	static struct pwm_output_values last_spos;
+	static struct pwm_output_values last_min;
+	static unsigned servo_count;
 
-	int fd = px4_open(dev, 0);
+	int fd = px4_open(_pwm_output_dev, 0);
 
 	if (fd < 0) {
-		PX4_ERR("can't open %s", dev);
+		PX4_ERR("can't open %s", _pwm_output_dev);
+		_thread_running = false;
+		return 1;
+	}
+
+	/* get the number of servo channels */
+	if (px4_ioctl(fd, PWM_SERVO_GET_COUNT, (unsigned long)&servo_count) < 0) {
+			PX4_ERR("PWM_SERVO_GET_COUNT");
+			px4_close(fd);
+			_thread_running = false;
+			return 1;
+
+	}
+
+	/* get current servo values */
+	for (unsigned i = 0; i < servo_count; i++) {
+
+		if (px4_ioctl(fd, PWM_SERVO_GET(i), (unsigned long)&last_spos.values[i]) < 0) {
+			PX4_ERR("PWM_SERVO_GET(%d)", i);
+			px4_close(fd);
+			_thread_running = false;
+			return 1;
+		}
+	}
+
+	/* get current pwm min */
+	if (px4_ioctl(fd, PWM_SERVO_GET_MIN_PWM, (long unsigned int)&last_min) < 0) {
+		PX4_ERR("failed getting pwm min values");
+		px4_close(fd);
+		_thread_running = false;
+		return 1;
+	}
+
+	if (px4_ioctl(fd, PWM_SERVO_SET_MODE, PWM_SERVO_ENTER_TEST_MODE) < 0) {
+		PX4_ERR("Failed to Enter pwm test mode");
+		px4_close(fd);
+		_thread_running = false;
+		return 1;
 	}
 
 	if (prepare(fd, &max_channels) != OK) {
@@ -340,7 +439,7 @@ int motor_ramp_thread_main(int argc, char *argv[])
 
 		switch (ramp_state) {
 		case RAMP_INIT: {
-				PX4_WARN("setting pwm min: %d", _min_pwm);
+				PX4_INFO("setting pwm min: %d", _min_pwm);
 				set_min_pwm(fd, max_channels, _min_pwm);
 				ramp_state = RAMP_MIN;
 				break;
@@ -348,7 +447,7 @@ int motor_ramp_thread_main(int argc, char *argv[])
 
 		case RAMP_MIN: {
 				if (timer > 3.0f) {
-					PX4_WARN("starting %s: %.2f sec", _mode_c, (double)_ramp_time);
+					PX4_INFO("starting %s: %.2f sec", _mode_c, (double)_ramp_time);
 					start = hrt_absolute_time();
 					ramp_state = RAMP_RAMP;
 				}
@@ -359,7 +458,7 @@ int motor_ramp_thread_main(int argc, char *argv[])
 
 		case RAMP_RAMP: {
 				if (_mode == RAMP) {
-					output += dt / _ramp_time;
+					output += 1000.0f * dt / (_max_pwm - _min_pwm) / _ramp_time;
 
 				} else if (_mode == SINE) {
 					// sine outpout with period T = _ramp_time and magnitude between [0,1]
@@ -375,7 +474,7 @@ int motor_ramp_thread_main(int argc, char *argv[])
 					output = _mode != RAMP ? output : 1.0f;
 					start = hrt_absolute_time();
 					ramp_state = RAMP_WAIT;
-					PX4_WARN("%s finished, waiting", _mode_c);
+					PX4_INFO("%s finished, waiting", _mode_c);
 				}
 
 				set_out(fd, max_channels, output);
@@ -383,8 +482,9 @@ int motor_ramp_thread_main(int argc, char *argv[])
 			}
 
 		case RAMP_WAIT: {
-				if (timer > 1.0f) {
+				if (timer > 0.5f) {
 					_thread_should_exit = true;
+					PX4_INFO("stopping");
 					break;
 				}
 
@@ -394,12 +494,35 @@ int motor_ramp_thread_main(int argc, char *argv[])
 		}
 
 		// rate limit
-		usleep(2000);
+		px4_usleep(2000);
 	}
 
 	if (fd >= 0) {
-		/* disarm */
-		ioctl(fd, PWM_SERVO_DISARM, 0);
+		/* set current pwm min */
+		if (px4_ioctl(fd, PWM_SERVO_SET_MIN_PWM, (long unsigned int)&last_min) < 0) {
+			PX4_ERR("failed setting pwm min values");
+			px4_close(fd);
+			_thread_running = false;
+			return 1;
+		}
+
+		/* set previous servo values */
+		for (unsigned i = 0; i < servo_count; i++) {
+
+			if (px4_ioctl(fd, PWM_SERVO_SET(i), (unsigned long)last_spos.values[i]) < 0) {
+				PX4_ERR("PWM_SERVO_SET(%d)", i);
+				px4_close(fd);
+				_thread_running = false;
+				return 1;
+			}
+		}
+
+		if (px4_ioctl(fd, PWM_SERVO_SET_MODE, PWM_SERVO_EXIT_TEST_MODE) < 0) {
+			PX4_ERR("Failed to Exit pwm test mode");
+			px4_close(fd);
+			_thread_running = false;
+			return 1;
+		}
 
 		px4_close(fd);
 	}

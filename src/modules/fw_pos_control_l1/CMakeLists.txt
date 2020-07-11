@@ -1,6 +1,6 @@
 ############################################################################
 #
-#   Copyright (c) 2015 PX4 Development Team. All rights reserved.
+#   Copyright (c) 2015-2017 PX4 Development Team. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -30,19 +30,20 @@
 # POSSIBILITY OF SUCH DAMAGE.
 #
 ############################################################################
+
+add_subdirectory(launchdetection)
+add_subdirectory(runway_takeoff)
+
 px4_add_module(
 	MODULE modules__fw_pos_control_l1
 	MAIN fw_pos_control_l1
-	STACK_MAIN 1200
-	COMPILE_FLAGS
-		-Os -Weffc++
 	SRCS
-		fw_pos_control_l1_main.cpp
-		landingslope.cpp
+		FixedwingPositionControl.cpp
+		FixedwingPositionControl.hpp
 	DEPENDS
-		platforms__common
-		git_ecl
-		lib__external_lgpl
-		lib__ecl
+		l1
+		launchdetection
+		landing_slope
+		runway_takeoff
+		tecs
 	)
-# vim: set noet ft=cmake fenc=utf-8 ff=unix : 

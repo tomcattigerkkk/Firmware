@@ -6,9 +6,12 @@
  */
 #pragma once
 
-#include <systemlib/param/param.h>
+#ifdef __PX4_NUTTX
 
-#include <uORB/topics/vehicle_status.h>
+#include <drivers/drv_hrt.h>
+#include <parameters/param.h>
+#include <px4_platform_common/log.h>
+
 #include "camera_interface.h"
 
 class CameraInterfacePWM : public CameraInterface
@@ -17,19 +20,15 @@ public:
 	CameraInterfacePWM();
 	virtual ~CameraInterfacePWM();
 
-	void trigger(bool enable);
-	void keep_alive(bool signal_on);
-
-	int powerOn();
-	int powerOff();
+	void trigger(bool trigger_on_true);
 
 	void info();
 
-	int _pins[6];
 private:
+	int32_t _pwm_camera_shoot = 0;
+	int32_t _pwm_camera_neutral = 0;
 	void setup();
 
-	param_t _p_pin;
-	bool _camera_is_on;
-
 };
+
+#endif /* ifdef __PX4_NUTTX */

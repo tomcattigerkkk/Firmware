@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012, 2013 PX4 Development Team. All rights reserved.
+ *  Copyright (C) 2012-2019 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,10 +34,10 @@
 /**
  * @file test_servo.c
  * Tests the servo outputs
- *
  */
 
-#include <px4_config.h>
+#include <px4_platform_common/time.h>
+#include <px4_platform_common/px4_config.h>
 
 #include <sys/types.h>
 
@@ -48,17 +48,15 @@
 #include <errno.h>
 #include <time.h>
 
-#include <arch/board/board.h>
 #include <drivers/drv_pwm_output.h>
 #include <systemlib/err.h>
 
-//#include <nuttx/spi.h>
-
-#include "tests.h"
+#include "tests_main.h"
 
 int test_servo(int argc, char *argv[])
 {
-	int fd, result;
+	int fd;
+	int result = 0;
 	servo_position_t data[PWM_OUTPUT_MAX_CHANNELS];
 	servo_position_t pos;
 
@@ -83,7 +81,7 @@ int test_servo(int argc, char *argv[])
 
 	if (result != OK) {
 		warnx("PWM_SERVO_GET_COUNT");
-		return ERROR;
+		goto out;
 	}
 
 	for (unsigned i = 0; i < servo_count; i++) {
@@ -103,6 +101,7 @@ int test_servo(int argc, char *argv[])
 
 	if (result != OK) {
 		warnx("FAIL: PWM_SERVO_SET_ARM_OK");
+		goto out;
 	}
 
 	/* tell output device that the system is armed (it will output values if safety is off) */
@@ -110,13 +109,19 @@ int test_servo(int argc, char *argv[])
 
 	if (result != OK) {
 		warnx("FAIL: PWM_SERVO_ARM");
+		goto out;
 	}
 
-	usleep(5000000);
+	px4_usleep(5000000);
 	printf("Advancing channel 0 to 1500\n");
 	result = ioctl(fd, PWM_SERVO_SET(0), 1500);
 	printf("Advancing channel 1 to 1800\n");
 	result = ioctl(fd, PWM_SERVO_SET(1), 1800);
 out:
-	return 0;
+
+	if (fd >= 0) {
+		close(fd);
+	}
+
+	return result;
 }

@@ -43,7 +43,7 @@
 /**
  * Loiter radius (FW only)
  *
- * Default value of loiter radius for missions, loiter, RTL, etc. (fixedwing only).
+ * Default value of loiter radius for missions, Hold mode, Return mode, etc. (fixedwing only).
  *
  * @unit m
  * @min 25
@@ -58,7 +58,7 @@ PARAM_DEFINE_FLOAT(NAV_LOITER_RAD, 50.0f);
  * Acceptance Radius
  *
  * Default acceptance radius, overridden by acceptance radius of waypoint if set.
- * For fixed wing NAV_ACC_RAD is the vertical acceptance, as the L1 turning distance is used for horizontal acceptance.
+ * For fixed wing the L1 turning distance is used for horizontal acceptance.
  *
  * @unit m
  * @min 0.05
@@ -70,40 +70,89 @@ PARAM_DEFINE_FLOAT(NAV_LOITER_RAD, 50.0f);
 PARAM_DEFINE_FLOAT(NAV_ACC_RAD, 10.0f);
 
 /**
- * Set data link loss failsafe mode
+ * FW Altitude Acceptance Radius
  *
- * The data link loss failsafe will only be entered after a timeout,
- * set by COM_DL_LOSS_T in seconds. Once the timeout occurs the selected
- * action will be executed. Setting this parameter to 4 will enable CASA
- * Outback Challenge rules, which are only recommended to participants
- * of that competition.
+ * Acceptance radius for fixedwing altitude.
  *
- * @value 0 Disabled
- * @value 1 Loiter
- * @value 2 Return to Land
- * @value 3 Land at current position
- *
+ * @unit m
+ * @min 0.05
+ * @max 200.0
+ * @decimal 1
+ * @increment 0.5
  * @group Mission
  */
-PARAM_DEFINE_INT32(NAV_DLL_ACT, 0);
+PARAM_DEFINE_FLOAT(NAV_FW_ALT_RAD, 10.0f);
 
 /**
- * Set RC loss failsafe mode
+ * FW Altitude Acceptance Radius before a landing
  *
- * The RC loss failsafe will only be entered after a timeout,
- * set by COM_RC_LOSS_T in seconds. If RC input checks have been disabled
- * by setting the COM_RC_IN_MODE param it will not be triggered.
- * Setting this parameter to 4 will enable CASA Outback Challenge rules,
- * which are only recommended to participants of that competition.
+ * Altitude acceptance used for the last waypoint before a fixed-wing landing. This is usually smaller
+ * than the standard vertical acceptance because close to the ground higher accuracy is required.
+ *
+ * @unit m
+ * @min 0.05
+ * @max 200.0
+ * @decimal 1
+ * @group Mission
+ */
+PARAM_DEFINE_FLOAT(NAV_FW_ALTL_RAD, 5.0f);
+
+/**
+ * MC Altitude Acceptance Radius
+ *
+ * Acceptance radius for multicopter altitude.
+ *
+ * @unit m
+ * @min 0.05
+ * @max 200.0
+ * @decimal 1
+ * @increment 0.5
+ * @group Mission
+ */
+PARAM_DEFINE_FLOAT(NAV_MC_ALT_RAD, 0.8f);
+
+/**
+ * Set traffic avoidance mode
+ *
+ * Enabling this will allow the system to respond
+ * to transponder data from e.g. ADSB transponders
  *
  * @value 0 Disabled
- * @value 1 Loiter
- * @value 2 Return to Land
- * @value 3 Land at current position
+ * @value 1 Warn only
+ * @value 2 Return mode
+ * @value 3 Land mode
+ * @value 4 Position Hold mode
  *
  * @group Mission
  */
-PARAM_DEFINE_INT32(NAV_RCL_ACT, 2);
+PARAM_DEFINE_INT32(NAV_TRAFF_AVOID, 1);
+
+/**
+ * Set NAV TRAFFIC AVOID RADIUS MANNED
+ *
+ * Defines the Radius where NAV TRAFFIC AVOID is Called
+ * For Manned Aviation
+ *
+ * @unit m
+ * @min 500
+ *
+ * @group Mission
+ */
+PARAM_DEFINE_FLOAT(NAV_TRAFF_A_RADM, 500);
+
+/**
+ * Set NAV TRAFFIC AVOID RADIUS
+ *
+ * Defines the Radius where NAV TRAFFIC AVOID is Called
+ * For Unmanned Aviation
+ *
+ * @unit m
+ * @min 10
+ * @max 500
+ *
+ * @group Mission
+ */
+PARAM_DEFINE_FLOAT(NAV_TRAFF_A_RADU, 10);
 
 /**
  * Airfield home Lat
@@ -141,3 +190,11 @@ PARAM_DEFINE_INT32(NAV_AH_LON, 1518423250);
  * @group Data Link Loss
  */
 PARAM_DEFINE_FLOAT(NAV_AH_ALT, 600.0f);
+
+/**
+ * Force VTOL mode takeoff and land
+ *
+ * @boolean
+ * @group Mission
+ */
+PARAM_DEFINE_INT32(NAV_FORCE_VT, 1);

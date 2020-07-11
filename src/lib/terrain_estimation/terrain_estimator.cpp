@@ -37,6 +37,8 @@
  */
 
 #include "terrain_estimator.h"
+#include <lib/ecl/geo/geo.h>
+#include <px4_platform_common/defines.h>
 
 #define DISTANCE_TIMEOUT 100000		// time in usec after which laser is considered dead
 
@@ -46,35 +48,25 @@ TerrainEstimator::TerrainEstimator() :
 	_time_last_distance(0),
 	_time_last_gps(0)
 {
-	memset(&_x._data[0], 0, sizeof(_x._data));
+	_x.zero();
 	_u_z = 0.0f;
 	_P.setIdentity();
 }
 
 bool TerrainEstimator::is_distance_valid(float distance)
 {
-	if (distance > 40.0f || distance < 0.00001f) {
-		return false;
-
-	} else {
-		return true;
-	}
+	return (distance < 40.0f && distance > 0.00001f);
 }
 
 void TerrainEstimator::predict(float dt, const struct vehicle_attitude_s *attitude,
 			       const struct sensor_combined_s *sensor,
 			       const struct distance_sensor_s *distance)
 {
-	if (attitude->R_valid) {
-		matrix::Matrix<float, 3, 3> R_att(attitude->R);
-		matrix::Vector<float, 3> a(sensor->accelerometer_m_s2);
-		matrix::Vector<float, 3> u;
-		u = R_att * a;
-		_u_z = u(2) + 9.81f; // compensate for gravity
-
-	} else {
-		_u_z = 0.0f;
-	}
+	matrix::Dcmf R_att = matrix::Quatf(attitude->q);
+	matrix::Vector3f a{sensor->accelerometer_m_s2[0], sensor->accelerometer_m_s2[1], sensor->accelerometer_m_s2[2]};
+	matrix::Vector<float, 3> u;
+	u = R_att * a;
+	_u_z = u(2) + CONSTANTS_ONE_G; // compensate for gravity
 
 	// dynamics matrix
 	matrix::Matrix<float, n_x, n_x> A;
@@ -115,7 +107,8 @@ void TerrainEstimator::measurement_update(uint64_t time_ref, const struct vehicl
 	}
 
 	if (distance->timestamp > _time_last_distance) {
-
+		matrix::Quatf q(attitude->q);
+		matrix::Eulerf euler(q);
 		float d = distance->current_distance;
 
 		matrix::Matrix<float, 1, n_x> C;
@@ -124,7 +117,7 @@ void TerrainEstimator::measurement_update(uint64_t time_ref, const struct vehicl
 		float R = 0.009f;
 
 		matrix::Vector<float, 1> y;
-		y(0) = d * cosf(attitude->roll) * cosf(attitude->pitch);
+		y(0) = d * cosf(euler.phi()) * cosf(euler.theta());
 
 		// residual
 		matrix::Matrix<float, 1, 1> S_I = (C * _P * C.transpose());
@@ -193,7 +186,7 @@ void TerrainEstimator::measurement_update(uint64_t time_ref, const struct vehicl
 	}
 
 	if (reinit) {
-		memset(&_x._data[0], 0, sizeof(_x._data));
+		_x.zero();
 		_P.setZero();
 		_P(0, 0) = _P(1, 1) = _P(2, 2) = 0.1f;
 	}

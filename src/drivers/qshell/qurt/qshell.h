@@ -40,18 +40,20 @@
 
 #pragma once
 
-#include <px4_app.h>
-#include <px4_defines.h>
-#include <map>
+#include <px4_platform_common/app.h>
 #include <string>
 #include <vector>
-#include "uORB/topics/qshell_req.h"
+#include <uORB/Publication.hpp>
+#include <uORB/topics/qshell_retval.h>
+#include <uORB/topics/qshell_req.h>
+
+#include "apps.h"
 
 class QShell
 {
 public:
 	QShell();
-	~QShell() {};
+	~QShell() {}
 
 	int main();
 	int run_cmd(const std::vector<std::string> &appargs);
@@ -60,7 +62,9 @@ public:
 
 private:
 
-	struct qshell_req_s m_qshell_req;
-	std::map<std::string, px4_main_t> apps;
+	uORB::Publication<qshell_retval_s>	_qshell_retval_pub{ORB_ID(qshell_retval)};
 
+	qshell_req_s m_qshell_req{};
+
+	apps_map_type m_apps;
 };

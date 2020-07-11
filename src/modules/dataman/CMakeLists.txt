@@ -33,12 +33,8 @@
 px4_add_module(
 	MODULE modules__dataman
 	MAIN dataman
-	STACK_MAIN 1200
 	COMPILE_FLAGS
-		-Os
+		-Wno-cast-align # TODO: fix and enable
 	SRCS
-		dataman.c
-	DEPENDS
-		platforms__common
+		dataman.cpp
 	)
-# vim: set noet ft=cmake fenc=utf-8 ff=unix : 

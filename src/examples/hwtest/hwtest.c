@@ -34,7 +34,6 @@
  * @file hwtest.c
  *
  * Simple output test.
- * @ref Documentation https://pixhawk.org/dev/examples/write_output
  *
  * @author Lorenz Meier <lm@inf.ethz.ch>
  */
@@ -43,7 +42,7 @@
 #include <string.h>
 
 #include <drivers/drv_hrt.h>
-#include <px4_config.h>
+#include <px4_platform_common/px4_config.h>
 #include <systemlib/err.h>
 #include <uORB/topics/actuator_armed.h>
 #include <uORB/topics/actuator_controls.h>
@@ -55,7 +54,7 @@ int ex_hwtest_main(int argc, char *argv[])
 {
 	warnx("DO NOT FORGET TO STOP THE DEFAULT CONTROL APPS!");
 	warnx("(run <commander stop>,)");
-	warnx("(    <mc_att_control stop> and)");
+	warnx("(    <mc_rate_control stop> and)");
 	warnx("(    <fw_att_control stop> to do so)");
 	warnx("usage: http://px4.io/dev/examples/write_output");
 
@@ -64,7 +63,7 @@ int ex_hwtest_main(int argc, char *argv[])
 	orb_advert_t actuator_pub_ptr = orb_advertise(ORB_ID(actuator_controls_0), &actuators);
 
 	struct actuator_armed_s arm;
-	memset(&arm, 0 , sizeof(arm));
+	memset(&arm, 0, sizeof(arm));
 
 	arm.timestamp = hrt_absolute_time();
 	arm.ready_to_arm = true;

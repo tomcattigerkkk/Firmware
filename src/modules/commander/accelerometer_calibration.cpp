@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2013-2016 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2013-2020 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -120,243 +120,195 @@
  * @author Anton Babushkin <anton.babushkin@me.com>
  */
 
-// FIXME: Can some of these headers move out with detect_ move?
-
 #include "accelerometer_calibration.h"
 #include "calibration_messages.h"
 #include "calibration_routines.h"
 #include "commander_helper.h"
 
-#include <px4_posix.h>
-#include <px4_time.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <poll.h>
-#include <fcntl.h>
-//#include <sys/prctl.h>
-#include <math.h>
-#include <poll.h>
-#include <float.h>
-#include <mathlib/mathlib.h>
-#include <string.h>
+#include <px4_platform_common/defines.h>
+#include <px4_platform_common/posix.h>
+#include <px4_platform_common/time.h>
+
 #include <drivers/drv_hrt.h>
-#include <drivers/drv_accel.h>
-#include <geo/geo.h>
-#include <conversion/rotation.h>
-#include <systemlib/param/param.h>
+#include <lib/mathlib/mathlib.h>
+#include <lib/ecl/geo/geo.h>
+#include <matrix/math.hpp>
+#include <lib/conversion/rotation.h>
+#include <lib/parameters/param.h>
 #include <systemlib/err.h>
 #include <systemlib/mavlink_log.h>
+#include <uORB/topics/sensor_accel.h>
+#include <uORB/topics/sensor_correction.h>
 #include <uORB/topics/vehicle_attitude.h>
+#include <uORB/Subscription.hpp>
+#include <uORB/SubscriptionBlocking.hpp>
 
-/* oddly, ERROR is not defined for c++ */
-#ifdef ERROR
-# undef ERROR
-#endif
-static const int ERROR = -1;
+using namespace time_literals;
+using namespace matrix;
+using math::radians;
 
-static const char *sensor_name = "accel";
+static constexpr char sensor_name[] {"accel"};
 
-static int32_t device_id[max_accel_sens];
-static int device_prio_max = 0;
-static int32_t device_id_primary = 0;
+static constexpr unsigned MAX_ACCEL_SENS = 3;
 
-calibrate_return do_accel_calibration_measurements(orb_advert_t *mavlink_log_pub, float (&accel_offs)[max_accel_sens][3], float (&accel_T)[max_accel_sens][3][3], unsigned *active_sensors);
-calibrate_return read_accelerometer_avg(int (&subs)[max_accel_sens], float (&accel_avg)[max_accel_sens][detect_orientation_side_count][3], unsigned orient, unsigned samples_num);
-int mat_invert3(float src[3][3], float dst[3][3]);
-calibrate_return calculate_calibration_values(unsigned sensor, float (&accel_ref)[max_accel_sens][detect_orientation_side_count][3], float (&accel_T)[max_accel_sens][3][3], float (&accel_offs)[max_accel_sens][3], float g);
+static calibrate_return do_accel_calibration_measurements(orb_advert_t *mavlink_log_pub,
+		Vector3f(&accel_offs)[MAX_ACCEL_SENS],
+		Matrix3f(&accel_T)[MAX_ACCEL_SENS], unsigned active_sensors);
+
+static calibrate_return read_accelerometer_avg(float (&accel_avg)[MAX_ACCEL_SENS][detect_orientation_side_count][3],
+		unsigned orient, unsigned samples_num);
+
+static calibrate_return calculate_calibration_values(unsigned sensor,
+		float (&accel_ref)[MAX_ACCEL_SENS][detect_orientation_side_count][3], Matrix3f(&accel_T)[MAX_ACCEL_SENS],
+		Vector3f(&accel_offs)[MAX_ACCEL_SENS]);
 
 /// Data passed to calibration worker routine
 typedef struct  {
-	orb_advert_t	*mavlink_log_pub;
-	unsigned	done_count;
-	int		subs[max_accel_sens];
-	float		accel_ref[max_accel_sens][detect_orientation_side_count][3];
+	orb_advert_t	*mavlink_log_pub{nullptr};
+	unsigned	done_count{0};
+	float		accel_ref[MAX_ACCEL_SENS][detect_orientation_side_count][3] {};
 } accel_worker_data_t;
 
 int do_accel_calibration(orb_advert_t *mavlink_log_pub)
 {
-#if !defined(__PX4_QURT) && !defined(__PX4_POSIX_EAGLE) && !defined(__PX4_POSIX_RPI)
-	int fd;
-#endif
-
 	calibration_log_info(mavlink_log_pub, CAL_QGC_STARTED_MSG, sensor_name);
 
-	struct accel_calibration_s accel_scale;
-	accel_scale.x_offset = 0.0f;
-	accel_scale.x_scale = 1.0f;
-	accel_scale.y_offset = 0.0f;
-	accel_scale.y_scale = 1.0f;
-	accel_scale.z_offset = 0.0f;
-	accel_scale.z_scale = 1.0f;
+	int res = PX4_OK;
 
-	int res = OK;
+	int32_t device_id[MAX_ACCEL_SENS] {};
+	int device_prio_max = 0;
+	int32_t device_id_primary = 0;
+	unsigned active_sensors = 0;
 
-	char str[30];
+	// We should not try to subscribe if the topic doesn't actually exist and can be counted.
+	const unsigned orb_accel_count = orb_group_count(ORB_ID(sensor_accel));
 
-	/* reset all sensors */
-	for (unsigned s = 0; s < max_accel_sens; s++) {
-#if !defined(__PX4_QURT) && !defined(__PX4_POSIX_EAGLE) && !defined(__PX4_POSIX_RPI)
-		sprintf(str, "%s%u", ACCEL_BASE_DEVICE_PATH, s);
-		/* reset all offsets to zero and all scales to one */
-		fd = px4_open(str, 0);
-
-		if (fd < 0) {
-			continue;
-		}
-
-		device_id[s] = px4_ioctl(fd, DEVIOCGDEVICEID, 0);
-
-		res = px4_ioctl(fd, ACCELIOCSSCALE, (long unsigned int)&accel_scale);
-		px4_close(fd);
-
-		if (res != OK) {
-			calibration_log_critical(mavlink_log_pub, CAL_ERROR_RESET_CAL_MSG, s);
-		}
-#else
-		(void)sprintf(str, "CAL_ACC%u_XOFF", s);
-		res = param_set(param_find(str), &accel_scale.x_offset);
-		if (res != OK) {
-			PX4_ERR("unable to reset %s", str);
-		}
-		(void)sprintf(str, "CAL_ACC%u_YOFF", s);
-		res = param_set(param_find(str), &accel_scale.y_offset);
-		if (res != OK) {
-			PX4_ERR("unable to reset %s", str);
-		}
-		(void)sprintf(str, "CAL_ACC%u_ZOFF", s);
-		res = param_set(param_find(str), &accel_scale.z_offset);
-		if (res != OK) {
-			PX4_ERR("unable to reset %s", str);
-		}
-		(void)sprintf(str, "CAL_ACC%u_XSCALE", s);
-		res = param_set(param_find(str), &accel_scale.x_scale);
-		if (res != OK) {
-			PX4_ERR("unable to reset %s", str);
-		}
-		(void)sprintf(str, "CAL_ACC%u_YSCALE", s);
-		res = param_set(param_find(str), &accel_scale.y_scale);
-		if (res != OK) {
-			PX4_ERR("unable to reset %s", str);
-		}
-		(void)sprintf(str, "CAL_ACC%u_ZSCALE", s);
-		res = param_set(param_find(str), &accel_scale.z_scale);
-		if (res != OK) {
-			PX4_ERR("unable to reset %s", str);
-		}
-#endif
+	// Warn that we will not calibrate more than max_accels accelerometers
+	if (orb_accel_count > MAX_ACCEL_SENS) {
+		calibration_log_critical(mavlink_log_pub, "Detected %u accels, but will calibrate only %u", orb_accel_count,
+					 MAX_ACCEL_SENS);
 	}
 
-	float accel_offs[max_accel_sens][3];
-	float accel_T[max_accel_sens][3][3];
-	unsigned active_sensors;
+	for (uint8_t cur_accel = 0; cur_accel < orb_accel_count && cur_accel < MAX_ACCEL_SENS; cur_accel++) {
+		uORB::SubscriptionData<sensor_accel_s> accel_sub{ORB_ID(sensor_accel), cur_accel};
+		device_id[cur_accel] = accel_sub.get().device_id;
+
+		if (device_id[cur_accel] != 0) {
+			// Get priority
+			int32_t prio = accel_sub.get_priority();
+
+			if (prio > device_prio_max) {
+				device_prio_max = prio;
+				device_id_primary = device_id[cur_accel];
+			}
+
+			active_sensors++;
+
+		} else {
+			calibration_log_critical(mavlink_log_pub, "Accel #%u no device id, abort", cur_accel);
+			return PX4_ERROR;
+		}
+	}
 
 	/* measure and calculate offsets & scales */
-	if (res == OK) {
-		calibrate_return cal_return = do_accel_calibration_measurements(mavlink_log_pub, accel_offs, accel_T, &active_sensors);
-		if (cal_return == calibrate_return_cancelled) {
-			// Cancel message already displayed, nothing left to do
-			return ERROR;
-		} else if (cal_return == calibrate_return_ok) {
-			res = OK;
-		} else {
-			res = ERROR;
-		}
+	Vector3f accel_offs[MAX_ACCEL_SENS] {};
+	Matrix3f accel_T[MAX_ACCEL_SENS] {};
+	calibrate_return cal_return = do_accel_calibration_measurements(mavlink_log_pub, accel_offs, accel_T, active_sensors);
+
+	if (cal_return != calibrate_return_ok) {
+		// Cancel message already displayed, nothing left to do
+		return PX4_ERROR;
 	}
 
-	if (res != OK) {
-		if (active_sensors == 0) {
-			calibration_log_critical(mavlink_log_pub, CAL_ERROR_SENSOR_MSG);
-		}
-		return ERROR;
+	if (active_sensors == 0) {
+		calibration_log_critical(mavlink_log_pub, CAL_ERROR_SENSOR_MSG);
+		return PX4_ERROR;
 	}
 
 	/* measurements completed successfully, rotate calibration values */
-	param_t board_rotation_h = param_find("SENS_BOARD_ROT");
-	int32_t board_rotation_int;
-	param_get(board_rotation_h, &(board_rotation_int));
-	enum Rotation board_rotation_id = (enum Rotation)board_rotation_int;
-	math::Matrix<3, 3> board_rotation;
-	get_rot_matrix(board_rotation_id, &board_rotation);
-	math::Matrix<3, 3> board_rotation_t = board_rotation.transposed();
+	int32_t board_rotation_int = 0;
+	param_get(param_find("SENS_BOARD_ROT"), &board_rotation_int);
+	const Dcmf board_rotation = get_rot_matrix((enum Rotation)board_rotation_int);
+	const Dcmf board_rotation_t = board_rotation.transpose();
 
-	for (unsigned i = 0; i < active_sensors; i++) {
+	param_set_no_notification(param_find("CAL_ACC_PRIME"), &device_id_primary);
 
-		/* handle individual sensors, one by one */
-		math::Vector<3> accel_offs_vec(accel_offs[i]);
-		math::Vector<3> accel_offs_rotated = board_rotation_t * accel_offs_vec;
-		math::Matrix<3, 3> accel_T_mat(accel_T[i]);
-		math::Matrix<3, 3> accel_T_rotated = board_rotation_t * accel_T_mat * board_rotation;
+	for (unsigned uorb_index = 0; uorb_index < MAX_ACCEL_SENS; uorb_index++) {
 
-		accel_scale.x_offset = accel_offs_rotated(0);
-		accel_scale.x_scale = accel_T_rotated(0, 0);
-		accel_scale.y_offset = accel_offs_rotated(1);
-		accel_scale.y_scale = accel_T_rotated(1, 1);
-		accel_scale.z_offset = accel_offs_rotated(2);
-		accel_scale.z_scale = accel_T_rotated(2, 2);
+		if (uorb_index < active_sensors) {
+			/* handle individual sensors, one by one */
+			const Vector3f accel_offs_rotated = board_rotation_t *accel_offs[uorb_index];
+			const Matrix3f accel_T_rotated = board_rotation_t *accel_T[uorb_index] * board_rotation;
 
-		bool failed = false;
+			PX4_INFO("found offset %d: x: %.6f, y: %.6f, z: %.6f", uorb_index,
+				 (double)accel_offs_rotated(0), (double)accel_offs_rotated(1), (double)accel_offs_rotated(2));
 
-		failed = failed || (OK != param_set_no_notification(param_find("CAL_ACC_PRIME"), &(device_id_primary)));
+			PX4_INFO("found scale %d: x: %.6f, y: %.6f, z: %.6f", uorb_index,
+				 (double)accel_T_rotated(0, 0), (double)accel_T_rotated(1, 1), (double)accel_T_rotated(2, 2));
+
+			char str[30] {};
+
+			// calibration offsets
+			float x_offset = accel_offs_rotated(0);
+			sprintf(str, "CAL_ACC%u_XOFF", uorb_index);
+			param_set_no_notification(param_find(str), &x_offset);
+
+			float y_offset = accel_offs_rotated(1);
+			sprintf(str, "CAL_ACC%u_YOFF", uorb_index);
+			param_set_no_notification(param_find(str), &y_offset);
+
+			float z_offset = accel_offs_rotated(2);
+			sprintf(str, "CAL_ACC%u_ZOFF", uorb_index);
+			param_set_no_notification(param_find(str), &z_offset);
 
 
-		PX4_DEBUG("found offset %d: x: %.6f, y: %.6f, z: %.6f", i,
-				(double)accel_scale.x_offset,
-				(double)accel_scale.y_offset,
-				(double)accel_scale.z_offset);
-		PX4_DEBUG("found scale %d: x: %.6f, y: %.6f, z: %.6f", i,
-				(double)accel_scale.x_scale,
-				(double)accel_scale.y_scale,
-				(double)accel_scale.z_scale);
+			// calibration scale
+			float x_scale = accel_T_rotated(0, 0);
+			sprintf(str, "CAL_ACC%u_XSCALE", uorb_index);
+			param_set_no_notification(param_find(str), &x_scale);
 
-		/* set parameters */
-		(void)sprintf(str, "CAL_ACC%u_XOFF", i);
-		failed |= (OK != param_set_no_notification(param_find(str), &(accel_scale.x_offset)));
-		(void)sprintf(str, "CAL_ACC%u_YOFF", i);
-		failed |= (OK != param_set_no_notification(param_find(str), &(accel_scale.y_offset)));
-		(void)sprintf(str, "CAL_ACC%u_ZOFF", i);
-		failed |= (OK != param_set_no_notification(param_find(str), &(accel_scale.z_offset)));
-		(void)sprintf(str, "CAL_ACC%u_XSCALE", i);
-		failed |= (OK != param_set_no_notification(param_find(str), &(accel_scale.x_scale)));
-		(void)sprintf(str, "CAL_ACC%u_YSCALE", i);
-		failed |= (OK != param_set_no_notification(param_find(str), &(accel_scale.y_scale)));
-		(void)sprintf(str, "CAL_ACC%u_ZSCALE", i);
-		failed |= (OK != param_set_no_notification(param_find(str), &(accel_scale.z_scale)));
-		(void)sprintf(str, "CAL_ACC%u_ID", i);
-		failed |= (OK != param_set_no_notification(param_find(str), &(device_id[i])));
+			float y_scale = accel_T_rotated(1, 1);
+			sprintf(str, "CAL_ACC%u_YSCALE", uorb_index);
+			param_set_no_notification(param_find(str), &y_scale);
 
-		if (failed) {
-			calibration_log_critical(mavlink_log_pub, CAL_ERROR_SET_PARAMS_MSG, i);
-			return ERROR;
-		}
+			float z_scale = accel_T_rotated(2, 2);
+			sprintf(str, "CAL_ACC%u_ZSCALE", uorb_index);
+			param_set_no_notification(param_find(str), &z_scale);
 
-#if !defined(__PX4_QURT) && !defined(__PX4_POSIX_EAGLE) && !defined(__PX4_POSIX_RPI)
-		sprintf(str, "%s%u", ACCEL_BASE_DEVICE_PATH, i);
-		fd = px4_open(str, 0);
+			// calibration device ID
+			sprintf(str, "CAL_ACC%u_ID", uorb_index);
+			param_set_no_notification(param_find(str), &device_id[uorb_index]);
 
-		if (fd < 0) {
-			calibration_log_critical(mavlink_log_pub, CAL_QGC_FAILED_MSG, "sensor does not exist");
-			res = ERROR;
 		} else {
-			res = px4_ioctl(fd, ACCELIOCSSCALE, (long unsigned int)&accel_scale);
-			px4_close(fd);
-		}
+			char str[30] {};
 
-		if (res != OK) {
-			calibration_log_critical(mavlink_log_pub, CAL_ERROR_APPLY_CAL_MSG, i);
+			// reset calibration offsets
+			sprintf(str, "CAL_ACC%u_XOFF", uorb_index);
+			param_reset(param_find(str));
+			sprintf(str, "CAL_ACC%u_YOFF", uorb_index);
+			param_reset(param_find(str));
+			sprintf(str, "CAL_ACC%u_ZOFF", uorb_index);
+			param_reset(param_find(str));
+
+			// reset calibration scale
+			sprintf(str, "CAL_ACC%u_XSCALE", uorb_index);
+			param_reset(param_find(str));
+			sprintf(str, "CAL_ACC%u_YSCALE", uorb_index);
+			param_reset(param_find(str));
+			sprintf(str, "CAL_ACC%u_ZSCALE", uorb_index);
+			param_reset(param_find(str));
+
+			// reset calibration device ID
+			sprintf(str, "CAL_ACC%u_ID", uorb_index);
+			param_reset(param_find(str));
 		}
-#endif
 	}
 
-	if (res == OK) {
-		/* auto-save to EEPROM */
-		res = param_save_default();
+	param_notify_changes();
 
-		if (res != OK) {
-			calibration_log_critical(mavlink_log_pub, CAL_ERROR_SAVE_PARAMS_MSG);
-		}
-
+	if (res == PX4_OK) {
 		/* if there is a any preflight-check system response, let the barrage of messages through */
-		usleep(200000);
+		px4_usleep(200000);
 
 		calibration_log_info(mavlink_log_pub, CAL_QGC_DONE_MSG, sensor_name);
 
@@ -365,24 +317,26 @@ int do_accel_calibration(orb_advert_t *mavlink_log_pub)
 	}
 
 	/* give this message enough time to propagate */
-	usleep(600000);
+	px4_usleep(600000);
 
 	return res;
 }
 
-static calibrate_return accel_calibration_worker(detect_orientation_return orientation, int cancel_sub, void* data)
+static calibrate_return accel_calibration_worker(detect_orientation_return orientation, int cancel_sub, void *data)
 {
 	const unsigned samples_num = 750;
-	accel_worker_data_t* worker_data = (accel_worker_data_t*)(data);
+	accel_worker_data_t *worker_data = (accel_worker_data_t *)(data);
 
-	calibration_log_info(worker_data->mavlink_log_pub, "[cal] Hold still, measuring %s side", detect_orientation_str(orientation));
+	calibration_log_info(worker_data->mavlink_log_pub, "[cal] Hold still, measuring %s side",
+			     detect_orientation_str(orientation));
 
-	read_accelerometer_avg(worker_data->subs, worker_data->accel_ref, orientation, samples_num);
+	read_accelerometer_avg(worker_data->accel_ref, orientation, samples_num);
 
-	calibration_log_info(worker_data->mavlink_log_pub, "[cal] %s side result: [%8.4f %8.4f %8.4f]", detect_orientation_str(orientation),
-				     (double)worker_data->accel_ref[0][orientation][0],
-				     (double)worker_data->accel_ref[0][orientation][1],
-				     (double)worker_data->accel_ref[0][orientation][2]);
+	calibration_log_info(worker_data->mavlink_log_pub, "[cal] %s side result: [%8.4f %8.4f %8.4f]",
+			     detect_orientation_str(orientation),
+			     (double)worker_data->accel_ref[0][orientation][0],
+			     (double)worker_data->accel_ref[0][orientation][1],
+			     (double)worker_data->accel_ref[0][orientation][2]);
 
 	worker_data->done_count++;
 	calibration_log_info(worker_data->mavlink_log_pub, CAL_QGC_PROGRESS_MSG, 17 * worker_data->done_count);
@@ -390,88 +344,31 @@ static calibrate_return accel_calibration_worker(detect_orientation_return orien
 	return calibrate_return_ok;
 }
 
-calibrate_return do_accel_calibration_measurements(orb_advert_t *mavlink_log_pub, float (&accel_offs)[max_accel_sens][3], float (&accel_T)[max_accel_sens][3][3], unsigned *active_sensors)
+static calibrate_return do_accel_calibration_measurements(orb_advert_t *mavlink_log_pub,
+		Vector3f(&accel_offs)[MAX_ACCEL_SENS], Matrix3f(&accel_T)[MAX_ACCEL_SENS], unsigned active_sensors)
 {
 	calibrate_return result = calibrate_return_ok;
 
-	*active_sensors = 0;
-
-	accel_worker_data_t worker_data;
-
+	accel_worker_data_t worker_data{};
 	worker_data.mavlink_log_pub = mavlink_log_pub;
-	worker_data.done_count = 0;
 
-	bool data_collected[detect_orientation_side_count] = { false, false, false, false, false, false };
-
-	// Initialize subs to error condition so we know which ones are open and which are not
-	for (size_t i=0; i<max_accel_sens; i++) {
-		worker_data.subs[i] = -1;
-	}
-
-	uint64_t timestamps[max_accel_sens];
-
-	// We should not try to subscribe if the topic doesn't actually exist and can be counted.
-	const unsigned accel_count = orb_group_count(ORB_ID(sensor_accel));
-	for (unsigned i = 0; i < accel_count; i++) {
-		worker_data.subs[i] = orb_subscribe_multi(ORB_ID(sensor_accel), i);
-		if (worker_data.subs[i] < 0) {
-			result = calibrate_return_error;
-			break;
-		}
-
-#if defined(__PX4_QURT) || defined(__PX4_POSIX_EAGLE) || defined(__PX4_POSIX_RPI)
-		// For QURT respectively the driver framework, we need to get the device ID by copying one report.
-		struct accel_report	accel_report;
-		orb_copy(ORB_ID(sensor_accel), worker_data.subs[i], &accel_report);
-		device_id[i] = accel_report.device_id;
-#endif
-		/* store initial timestamp - used to infer which sensors are active */
-		struct accel_report arp = {};
-		(void)orb_copy(ORB_ID(sensor_accel), worker_data.subs[i], &arp);
-		timestamps[i] = arp.timestamp;
-
-		if (device_id[i] != 0) {
-			// Get priority
-			int32_t prio;
-			orb_priority(worker_data.subs[i], &prio);
-
-			if (prio > device_prio_max) {
-				device_prio_max = prio;
-				device_id_primary = device_id[i];
-			}
-		} else {
-			calibration_log_critical(mavlink_log_pub, "[cal] Accel #%u no device id, abort", i);
-			result = calibrate_return_error;
-			break;
-		}
-	}
+	bool data_collected[detect_orientation_side_count] {};
 
 	if (result == calibrate_return_ok) {
 		int cancel_sub = calibrate_cancel_subscribe();
-		result = calibrate_from_orientation(mavlink_log_pub, cancel_sub, data_collected, accel_calibration_worker, &worker_data, false /* normal still */);
-		calibrate_cancel_unsubscribe(cancel_sub);
-	}
+		result = calibrate_from_orientation(mavlink_log_pub, cancel_sub, data_collected, accel_calibration_worker, &worker_data,
+						    false);
 
-	/* close all subscriptions */
-	for (unsigned i = 0; i < max_accel_sens; i++) {
-		if (worker_data.subs[i] >= 0) {
-			/* figure out which sensors were active */
-			struct accel_report arp = {};
-			(void)orb_copy(ORB_ID(sensor_accel), worker_data.subs[i], &arp);
-			if (arp.timestamp != 0 && timestamps[i] != arp.timestamp) {
-				(*active_sensors)++;
-			}
-			px4_close(worker_data.subs[i]);
-		}
+		calibrate_cancel_unsubscribe(cancel_sub);
 	}
 
 	if (result == calibrate_return_ok) {
 		/* calculate offsets and transform matrix */
-		for (unsigned i = 0; i < (*active_sensors); i++) {
-			result = calculate_calibration_values(i, worker_data.accel_ref, accel_T, accel_offs, CONSTANTS_ONE_G);
+		for (unsigned i = 0; i < active_sensors; i++) {
+			result = calculate_calibration_values(i, worker_data.accel_ref, accel_T, accel_offs);
 
 			if (result != calibrate_return_ok) {
-				calibration_log_critical(mavlink_log_pub, "[cal] ERROR: calibration calculation error");
+				calibration_log_critical(mavlink_log_pub, "ERROR: calibration calculation error");
 				break;
 			}
 		}
@@ -483,66 +380,69 @@ calibrate_return do_accel_calibration_measurements(orb_advert_t *mavlink_log_pub
 /*
  * Read specified number of accelerometer samples, calculate average and dispersion.
  */
-calibrate_return read_accelerometer_avg(int (&subs)[max_accel_sens], float (&accel_avg)[max_accel_sens][detect_orientation_side_count][3], unsigned orient, unsigned samples_num)
+static calibrate_return read_accelerometer_avg(float (&accel_avg)[MAX_ACCEL_SENS][detect_orientation_side_count][3],
+		unsigned orient, unsigned samples_num)
 {
 	/* get total sensor board rotation matrix */
-	param_t board_rotation_h = param_find("SENS_BOARD_ROT");
-	param_t board_offset_x = param_find("SENS_BOARD_X_OFF");
-	param_t board_offset_y = param_find("SENS_BOARD_Y_OFF");
-	param_t board_offset_z = param_find("SENS_BOARD_Z_OFF");
+	float board_offset[3] {};
+	param_get(param_find("SENS_BOARD_X_OFF"), &board_offset[0]);
+	param_get(param_find("SENS_BOARD_Y_OFF"), &board_offset[1]);
+	param_get(param_find("SENS_BOARD_Z_OFF"), &board_offset[2]);
 
-	float board_offset[3];
-	param_get(board_offset_x, &board_offset[0]);
-	param_get(board_offset_y, &board_offset[1]);
-	param_get(board_offset_z, &board_offset[2]);
+	const Dcmf board_rotation_offset{Eulerf{math::radians(board_offset[0]), math::radians(board_offset[1]), math::radians(board_offset[2])}};
 
-	math::Matrix<3, 3> board_rotation_offset;
-	board_rotation_offset.from_euler(M_DEG_TO_RAD_F * board_offset[0],
-			M_DEG_TO_RAD_F * board_offset[1],
-			M_DEG_TO_RAD_F * board_offset[2]);
+	int32_t board_rotation_int = 0;
+	param_get(param_find("SENS_BOARD_ROT"), &board_rotation_int);
 
-	int32_t board_rotation_int;
-	param_get(board_rotation_h, &(board_rotation_int));
-	enum Rotation board_rotation_id = (enum Rotation)board_rotation_int;
-	math::Matrix<3, 3> board_rotation;
-	get_rot_matrix(board_rotation_id, &board_rotation);
+	const Dcmf board_rotation = board_rotation_offset * get_rot_matrix((enum Rotation)board_rotation_int);
 
-	/* combine board rotation with offset rotation */
-	board_rotation = board_rotation_offset * board_rotation;
-
-	px4_pollfd_struct_t fds[max_accel_sens];
-
-	for (unsigned i = 0; i < max_accel_sens; i++) {
-		fds[i].fd = subs[i];
-		fds[i].events = POLLIN;
-	}
-
-	unsigned counts[max_accel_sens] = { 0 };
-	float accel_sum[max_accel_sens][3];
-	memset(accel_sum, 0, sizeof(accel_sum));
+	Vector3f accel_sum[MAX_ACCEL_SENS] {};
+	unsigned counts[MAX_ACCEL_SENS] {};
 
 	unsigned errcount = 0;
 
+	// sensor thermal corrections
+	uORB::Subscription sensor_correction_sub{ORB_ID(sensor_correction)};
+	sensor_correction_s sensor_correction{};
+	sensor_correction_sub.copy(&sensor_correction);
+
+	uORB::SubscriptionBlocking<sensor_accel_s> accel_sub[MAX_ACCEL_SENS] {
+		{ORB_ID(sensor_accel), 0, 0},
+		{ORB_ID(sensor_accel), 0, 1},
+		{ORB_ID(sensor_accel), 0, 2},
+	};
+
 	/* use the first sensor to pace the readout, but do per-sensor counts */
 	while (counts[0] < samples_num) {
-		int poll_ret = px4_poll(&fds[0], max_accel_sens, 1000);
+		if (accel_sub[0].updatedBlocking(100000)) {
+			for (unsigned accel_index = 0; accel_index < MAX_ACCEL_SENS; accel_index++) {
+				sensor_accel_s arp;
 
-		if (poll_ret > 0) {
+				if (accel_sub[accel_index].update(&arp)) {
+					// fetch optional thermal offset corrections in sensor/board frame
+					Vector3f offset{0, 0, 0};
+					sensor_correction_sub.update(&sensor_correction);
 
-			for (unsigned s = 0; s < max_accel_sens; s++) {
-				bool changed;
-				orb_check(subs[s], &changed);
+					if (sensor_correction.timestamp > 0 && arp.device_id != 0) {
+						for (uint8_t correction_index = 0; correction_index < MAX_ACCEL_SENS; correction_index++) {
+							if (sensor_correction.accel_device_ids[correction_index] == arp.device_id) {
+								switch (correction_index) {
+								case 0:
+									offset = Vector3f{sensor_correction.accel_offset_0};
+									break;
+								case 1:
+									offset = Vector3f{sensor_correction.accel_offset_1};
+									break;
+								case 2:
+									offset = Vector3f{sensor_correction.accel_offset_2};
+									break;
+								}
+							}
+						}
+					}
 
-				if (changed) {
-
-					struct accel_report arp;
-					orb_copy(ORB_ID(sensor_accel), subs[s], &arp);
-
-					accel_sum[s][0] += arp.x;
-					accel_sum[s][1] += arp.y;
-					accel_sum[s][2] += arp.z;
-
-					counts[s]++;
+					accel_sum[accel_index] += Vector3f{arp.x, arp.y, arp.z} - offset;
+					counts[accel_index]++;
 				}
 			}
 
@@ -556,179 +456,163 @@ calibrate_return read_accelerometer_avg(int (&subs)[max_accel_sens], float (&acc
 		}
 	}
 
-	// rotate sensor measurements from body frame into sensor frame using board rotation matrix
-	for (unsigned i = 0; i < max_accel_sens; i++) {
-		math::Vector<3> accel_sum_vec(&accel_sum[i][0]);
-		accel_sum_vec = board_rotation * accel_sum_vec;
-		memcpy(&accel_sum[i][0], &accel_sum_vec.data[0], sizeof(accel_sum[i]));
+	// rotate sensor measurements from sensor to body frame using board rotation matrix
+	for (unsigned s = 0; s < MAX_ACCEL_SENS; s++) {
+		accel_sum[s] = board_rotation * accel_sum[s];
 	}
 
-	for (unsigned s = 0; s < max_accel_sens; s++) {
-		for (unsigned i = 0; i < 3; i++) {
-			accel_avg[s][orient][i] = accel_sum[s][i] / counts[s];
-		}
+	for (unsigned s = 0; s < MAX_ACCEL_SENS; s++) {
+		const auto sum = accel_sum[s] / counts[s];
+		sum.copyTo(accel_avg[s][orient]);
 	}
 
 	return calibrate_return_ok;
 }
 
-int mat_invert3(float src[3][3], float dst[3][3])
-{
-	float det = src[0][0] * (src[1][1] * src[2][2] - src[1][2] * src[2][1]) -
-		    src[0][1] * (src[1][0] * src[2][2] - src[1][2] * src[2][0]) +
-		    src[0][2] * (src[1][0] * src[2][1] - src[1][1] * src[2][0]);
-
-	if (fabsf(det) < FLT_EPSILON) {
-		return ERROR;        // Singular matrix
-	}
-
-	dst[0][0] = (src[1][1] * src[2][2] - src[1][2] * src[2][1]) / det;
-	dst[1][0] = (src[1][2] * src[2][0] - src[1][0] * src[2][2]) / det;
-	dst[2][0] = (src[1][0] * src[2][1] - src[1][1] * src[2][0]) / det;
-	dst[0][1] = (src[0][2] * src[2][1] - src[0][1] * src[2][2]) / det;
-	dst[1][1] = (src[0][0] * src[2][2] - src[0][2] * src[2][0]) / det;
-	dst[2][1] = (src[0][1] * src[2][0] - src[0][0] * src[2][1]) / det;
-	dst[0][2] = (src[0][1] * src[1][2] - src[0][2] * src[1][1]) / det;
-	dst[1][2] = (src[0][2] * src[1][0] - src[0][0] * src[1][2]) / det;
-	dst[2][2] = (src[0][0] * src[1][1] - src[0][1] * src[1][0]) / det;
-
-	return OK;
-}
-
-calibrate_return calculate_calibration_values(unsigned sensor, float (&accel_ref)[max_accel_sens][detect_orientation_side_count][3], float (&accel_T)[max_accel_sens][3][3], float (&accel_offs)[max_accel_sens][3], float g)
+static calibrate_return calculate_calibration_values(unsigned sensor,
+		float (&accel_ref)[MAX_ACCEL_SENS][detect_orientation_side_count][3], Matrix3f(&accel_T)[MAX_ACCEL_SENS],
+		Vector3f(&accel_offs)[MAX_ACCEL_SENS])
 {
 	/* calculate offsets */
 	for (unsigned i = 0; i < 3; i++) {
-		accel_offs[sensor][i] = (accel_ref[sensor][i * 2][i] + accel_ref[sensor][i * 2 + 1][i]) / 2;
+		accel_offs[sensor](i) = (accel_ref[sensor][i * 2][i] + accel_ref[sensor][i * 2 + 1][i]) / 2;
 	}
 
 	/* fill matrix A for linear equations system*/
-	float mat_A[3][3];
-	memset(mat_A, 0, sizeof(mat_A));
+	Matrix3f mat_A;
 
 	for (unsigned i = 0; i < 3; i++) {
 		for (unsigned j = 0; j < 3; j++) {
-			float a = accel_ref[sensor][i * 2][j] - accel_offs[sensor][j];
-			mat_A[i][j] = a;
+			mat_A(i, j) = accel_ref[sensor][i * 2][j] - accel_offs[sensor](j);
 		}
 	}
 
 	/* calculate inverse matrix for A */
-	float mat_A_inv[3][3];
-
-	if (mat_invert3(mat_A, mat_A_inv) != OK) {
-		return calibrate_return_error;
-	}
+	const Matrix3f mat_A_inv = mat_A.I();
 
 	/* copy results to accel_T */
 	for (unsigned i = 0; i < 3; i++) {
 		for (unsigned j = 0; j < 3; j++) {
 			/* simplify matrices mult because b has only one non-zero element == g at index i */
-			accel_T[sensor][j][i] = mat_A_inv[j][i] * g;
+			accel_T[sensor](j, i) = mat_A_inv(j, i) * CONSTANTS_ONE_G;
 		}
 	}
 
 	return calibrate_return_ok;
 }
 
-int do_level_calibration(orb_advert_t *mavlink_log_pub) {
-	const unsigned cal_time = 5;
-	const unsigned cal_hz = 100;
-	unsigned settle_time = 30;
-
+int do_level_calibration(orb_advert_t *mavlink_log_pub)
+{
 	bool success = false;
-	int att_sub = orb_subscribe(ORB_ID(vehicle_attitude));
-	struct vehicle_attitude_s att;
-	memset(&att, 0, sizeof(att));
 
 	calibration_log_info(mavlink_log_pub, CAL_QGC_STARTED_MSG, "level");
 
 	param_t roll_offset_handle = param_find("SENS_BOARD_X_OFF");
 	param_t pitch_offset_handle = param_find("SENS_BOARD_Y_OFF");
-	param_t board_rot_handle = param_find("SENS_BOARD_ROT");
 
-	// save old values if calibration fails
-	float roll_offset_current;
-	float pitch_offset_current;
-	int32_t board_rot_current = 0;
+	// get old values
+	float roll_offset_current = 0.f;
+	float pitch_offset_current = 0.f;
 	param_get(roll_offset_handle, &roll_offset_current);
 	param_get(pitch_offset_handle, &pitch_offset_current);
-	param_get(board_rot_handle, &board_rot_current);
 
-	// give attitude some time to settle if there have been changes to the board rotation parameters
-	if (board_rot_current == 0 && fabsf(roll_offset_current) < FLT_EPSILON && fabsf(pitch_offset_current) < FLT_EPSILON ) {
-		settle_time = 0;
-	}
+	int32_t board_rot_current = 0;
+	param_get(param_find("SENS_BOARD_ROT"), &board_rot_current);
 
-	float zero = 0.0f;
-	param_set(roll_offset_handle, &zero);
-	param_set(pitch_offset_handle, &zero);
+	const Dcmf board_rotation_offset{Eulerf{radians(roll_offset_current), radians(pitch_offset_current), 0.f}};
 
-	px4_pollfd_struct_t fds[1];
-
-	fds[0].fd = att_sub;
-	fds[0].events = POLLIN;
-
-	float roll_mean = 0.0f;
-	float pitch_mean = 0.0f;
+	float roll_mean = 0.f;
+	float pitch_mean = 0.f;
 	unsigned counter = 0;
+	bool had_motion = true;
+	int num_retries = 0;
 
-	// sleep for some time
-	hrt_abstime start = hrt_absolute_time();
-	while(hrt_elapsed_time(&start) < settle_time * 1000000) {
-		calibration_log_info(mavlink_log_pub, CAL_QGC_PROGRESS_MSG, (int)(90*hrt_elapsed_time(&start)/1e6f/(float)settle_time));
-		sleep(settle_time / 10);
-	}
+	uORB::SubscriptionBlocking<vehicle_attitude_s> att_sub{ORB_ID(vehicle_attitude)};
 
-	start = hrt_absolute_time();
-	// average attitude for 5 seconds
-	while(hrt_elapsed_time(&start) < cal_time * 1000000) {
-		int pollret = px4_poll(&fds[0], (sizeof(fds) / sizeof(fds[0])), 100);
+	while (had_motion && num_retries++ < 50) {
+		Vector2f min_angles{100.f, 100.f};
+		Vector2f max_angles{-100.f, -100.f};
+		roll_mean = 0.0f;
+		pitch_mean = 0.0f;
+		counter = 0;
+		int last_progress_report = -100;
+		const hrt_abstime calibration_duration = 500_ms;
+		const hrt_abstime start = hrt_absolute_time();
 
-		if (pollret <= 0) {
-			// attitude estimator is not running
-			calibration_log_critical(mavlink_log_pub, "attitude estimator not running - check system boot");
-			calibration_log_critical(mavlink_log_pub, CAL_QGC_FAILED_MSG, "level");
-			goto out;
+		while (hrt_elapsed_time(&start) < calibration_duration) {
+
+			vehicle_attitude_s att{};
+
+			if (!att_sub.updateBlocking(att, 100000)) {
+				// attitude estimator is not running
+				calibration_log_critical(mavlink_log_pub, "attitude estimator not running - check system boot");
+				calibration_log_critical(mavlink_log_pub, CAL_QGC_FAILED_MSG, "level");
+				goto out;
+			}
+
+			int progress = 100 * hrt_elapsed_time(&start) / calibration_duration;
+
+			if (progress >= last_progress_report + 20) {
+				calibration_log_info(mavlink_log_pub, CAL_QGC_PROGRESS_MSG, progress);
+				last_progress_report = progress;
+			}
+
+			Eulerf att_euler{Quatf{att.q}};
+
+			// keep min + max angles
+			for (int i = 0; i < 2; ++i) {
+				if (att_euler(i) < min_angles(i)) { min_angles(i) = att_euler(i); }
+
+				if (att_euler(i) > max_angles(i)) { max_angles(i) = att_euler(i); }
+			}
+
+			att_euler(2) = 0.f; // ignore yaw
+
+			att_euler = Eulerf{board_rotation_offset *Dcmf{att_euler}};  // subtract existing board rotation
+			roll_mean += att_euler.phi();
+			pitch_mean += att_euler.theta();
+			++counter;
 		}
 
-		orb_copy(ORB_ID(vehicle_attitude), att_sub, &att);
-		roll_mean += att.roll;
-		pitch_mean += att.pitch;
-		counter++;
+		// motion detection: check that (max-min angle) is within a threshold.
+		// The difference is typically <0.1 deg while at rest
+		if (max_angles(0) - min_angles(0) < math::radians(0.5f) &&
+		    max_angles(1) - min_angles(1) < math::radians(0.5f)) {
+
+			had_motion = false;
+		}
 	}
 
 	calibration_log_info(mavlink_log_pub, CAL_QGC_PROGRESS_MSG, 100);
 
-	if (counter > (cal_time * cal_hz / 2 )) {
-		roll_mean /= counter;
-		pitch_mean /= counter;
-	} else {
-		calibration_log_info(mavlink_log_pub, "not enough measurements taken");
-		success = false;
-		goto out;
-	}
+	roll_mean /= counter;
+	pitch_mean /= counter;
 
-	if (fabsf(roll_mean) > 0.8f ) {
+	if (had_motion) {
+		calibration_log_critical(mavlink_log_pub, "motion during calibration");
+
+	} else if (fabsf(roll_mean) > 0.8f) {
 		calibration_log_critical(mavlink_log_pub, "excess roll angle");
-	} else if (fabsf(pitch_mean) > 0.8f ) {
+
+	} else if (fabsf(pitch_mean) > 0.8f) {
 		calibration_log_critical(mavlink_log_pub, "excess pitch angle");
+
 	} else {
-		roll_mean *= (float)M_RAD_TO_DEG;
-		pitch_mean *= (float)M_RAD_TO_DEG;
-		param_set(roll_offset_handle, &roll_mean);
-		param_set(pitch_offset_handle, &pitch_mean);
+		float roll_mean_degrees = math::degrees(roll_mean);
+		float pitch_mean_degrees = math::degrees(pitch_mean);
+		param_set_no_notification(roll_offset_handle, &roll_mean_degrees);
+		param_set_no_notification(pitch_offset_handle, &pitch_mean_degrees);
+		param_notify_changes();
 		success = true;
 	}
 
 out:
+
 	if (success) {
 		calibration_log_info(mavlink_log_pub, CAL_QGC_DONE_MSG, "level");
 		return 0;
+
 	} else {
-		// set old parameters
-		param_set(roll_offset_handle, &roll_offset_current);
-		param_set(pitch_offset_handle, &pitch_offset_current);
 		calibration_log_critical(mavlink_log_pub, CAL_QGC_FAILED_MSG, "level");
 		return 1;
 	}

@@ -30,16 +30,20 @@
 # POSSIBILITY OF SUCH DAMAGE.
 #
 #############################################################################
+
+add_subdirectory(Utility)
+
 px4_add_module(
 	MODULE modules__ekf2
 	MAIN ekf2
-	COMPILE_FLAGS -Os
-	STACK_MAIN 2500
-	STACK_MAX 4000
+	COMPILE_FLAGS
+	STACK_MAX 2400
 	SRCS
 		ekf2_main.cpp
 	DEPENDS
-		platforms__common
 		git_ecl
+		ecl_EKF
+		ecl_geo
+		perf
+		Ekf2Utility
 	)
-# vim: set noet ft=cmake fenc=utf-8 ff=unix : 

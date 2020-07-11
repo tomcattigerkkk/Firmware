@@ -33,12 +33,9 @@
 px4_add_module(
 	MODULE systemcmds__param
 	MAIN param
-	STACK_MAIN 2500
 	COMPILE_FLAGS
-		-Os
+		-Wno-array-bounds
 	SRCS
-		param.c
+		param.cpp
 	DEPENDS
-		platforms__common
 	)
-# vim: set noet ft=cmake fenc=utf-8 ff=unix : 
